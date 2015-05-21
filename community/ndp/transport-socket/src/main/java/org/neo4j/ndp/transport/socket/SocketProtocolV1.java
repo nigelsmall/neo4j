@@ -80,7 +80,7 @@ public class SocketProtocolV1 implements SocketProtocol
             @Override
             public void run()
             {
-                onMessagDone();
+                onMessageDone();
             }
         } );
     }
@@ -265,7 +265,7 @@ public class SocketProtocolV1 implements SocketProtocol
 
     public void onBatchOfMessagesDone()
     {
-        onMessagDone();
+        onMessageDone();
     }
 
     private void onMessageStarted()
@@ -273,7 +273,7 @@ public class SocketProtocolV1 implements SocketProtocol
         inFlight.incrementAndGet();
     }
 
-    private void onMessagDone()
+    private void onMessageDone()
     {
         if ( inFlight.decrementAndGet() == 0 )
         {
