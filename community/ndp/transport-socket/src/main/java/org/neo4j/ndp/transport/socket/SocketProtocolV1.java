@@ -63,6 +63,8 @@ public class SocketProtocolV1 implements SocketProtocol
     }
 
     private State state = State.AWAITING_CHUNK;
+    private boolean chunkFlag1 = false;
+    private boolean chunkFlag2 = false;
     private int chunkSize = 0;
 
     public SocketProtocolV1( final Log log, Session session )
@@ -101,18 +103,22 @@ public class SocketProtocolV1 implements SocketProtocol
                 {
                 case AWAITING_CHUNK:
                 {
+                    int chunkHeader;
                     if ( data.readableBytes() >= 2 )
                     {
                         // Whole header available, read that
-                        chunkSize = data.readUnsignedShort();
+                        chunkHeader = data.readUnsignedShort();
                         handleHeader( channelContext );
                     }
                     else
                     {
                         // Only one byte available, read that and wait for the second byte
-                        chunkSize = data.readByte() << 8;
+                        chunkHeader = data.readByte() << 8;
                         state = State.IN_HEADER;
                     }
+                    chunkFlag1 = (chunkHeader & 0x8000) == 0x8000;
+                    chunkFlag2 = (chunkHeader & 0x4000) == 0x4000;
+                    chunkSize = chunkHeader & 0x3FFF;
                     break;
                 }
                 case IN_HEADER:
