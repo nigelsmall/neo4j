@@ -45,7 +45,7 @@ import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgRecord;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.acceptedVersions;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.chunk;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.eventuallyRecieves;
+import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.eventuallyReceives;
 import static org.neo4j.runtime.internal.runner.StreamMatchers.eqRecord;
 
 @RunWith(Parameterized.class)
@@ -98,7 +98,7 @@ public class TransportSessionIT
                 .send( acceptedVersions( 1, 0, 0, 0 ) );
 
         // Then
-        assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 1} ) );
+        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
     }
 
     @Test
@@ -109,7 +109,7 @@ public class TransportSessionIT
                 .send( acceptedVersions( 1337, 0, 0, 0 ) );
 
         // Then
-        assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 0} ) );
+        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 0} ) );
     }
 
     @Test
@@ -124,8 +124,8 @@ public class TransportSessionIT
                         pullAll() ) );
 
         // Then
-        assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, eventuallyRecieves(
+        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
+        assertThat( client, TransportTestUtil.eventuallyReceives(
                 msgSuccess(),
                 msgSuccess( map( "fields", asList( "a", "a_squared" ) ) ),
                 msgRecord( eqRecord( equalTo( 1l ), equalTo( 1l ) ) ),

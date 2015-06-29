@@ -45,7 +45,7 @@ import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgFailure;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.serialize;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.acceptedVersions;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.chunk;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.eventuallyRecieves;
+import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.eventuallyReceives;
 
 @RunWith( Parameterized.class )
 public class TransportErrorIT
@@ -80,11 +80,12 @@ public class TransportErrorIT
                 .send( chunk( 32, truncated ) );
 
         // Then
-        assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, eventuallyRecieves(
+        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
+        assertThat( client, TransportTestUtil.eventuallyReceives(
                 msgFailure( new Neo4jError( Status.Request.InvalidFormat,
-                        "Unable to deserialize request, message boundary found before message ended. This indicates " +
-                        "a serialization or framing problem with your client driver." ) ) ) );
+                        "Unable to deserialize request, message boundary found before message " +
+                                "ended. This indicates " +
+                                "a serialization or framing problem with your client driver." ) ) ) );
     }
 
     @Test
@@ -107,11 +108,12 @@ public class TransportErrorIT
                 .send( chunk( 32, invalidMessage ) );
 
         // Then
-        assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, eventuallyRecieves(
+        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
+        assertThat( client, TransportTestUtil.eventuallyReceives(
                 msgFailure( new Neo4jError( Status.Request.InvalidFormat,
-                        "Unable to read MSG_RUN message. Error was: Wrong type received. Expected MAP, received: " +
-                        "INTEGER (0xff)." ) ) ) );
+                        "Unable to read MSG_RUN message. Error was: Wrong type received. Expected" +
+                                " MAP, received: " +
+                                "INTEGER (0xff)." ) ) ) );
     }
 
     @Test
@@ -133,8 +135,8 @@ public class TransportErrorIT
                 .send( chunk( 32, invalidMessage ) );
 
         // Then
-        assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, eventuallyRecieves(
+        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
+        assertThat( client, TransportTestUtil.eventuallyReceives(
                 msgFailure( new Neo4jError( Status.Request.Invalid, "0x66 is not a valid message type." ) ) ) );
     }
 
@@ -158,11 +160,11 @@ public class TransportErrorIT
                 .send( chunk( 32, invalidMessage ) );
 
         // Then
-        assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, eventuallyRecieves(
+        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
+        assertThat( client, TransportTestUtil.eventuallyReceives(
                 msgFailure( new Neo4jError( Status.Request.InvalidFormat,
                         "Unable to read MSG_RUN message. Error was: Wrong type received. Expected TEXT, received: " +
-                        "RESERVED (0xff)." ) ) ) );
+                                "RESERVED (0xff)." ) ) ) );
     }
 
     @Before

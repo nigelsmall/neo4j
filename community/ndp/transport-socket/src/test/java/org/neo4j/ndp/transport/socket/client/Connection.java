@@ -27,11 +27,14 @@ public interface Connection extends AutoCloseable
 {
     Connection connect( HostnamePort address ) throws Exception;
 
-    Connection send( byte[] rawBytes ) throws Exception;
+    Connection send( byte[] rawBytes ) throws IOException;
 
-    byte[] recv( int length ) throws Exception;
+    byte[] recv( int length ) throws IOException, InterruptedException;
 
     void discard( int length ) throws IOException;
 
     void disconnect() throws Exception;
+
+    boolean isConnected();
+
 }

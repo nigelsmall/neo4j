@@ -63,7 +63,7 @@ public class SecureWebSocketConnection implements Connection, WebSocketListener
     }
 
     @Override
-    public Connection send( byte[] rawBytes ) throws Exception
+    public Connection send( byte[] rawBytes ) throws IOException
     {
         // The WS client *mutates* the buffer we give it, so we need to copy it here to allow the caller to retain
         // ownership
@@ -73,7 +73,7 @@ public class SecureWebSocketConnection implements Connection, WebSocketListener
     }
 
     @Override
-    public byte[] recv( int length ) throws Exception
+    public byte[] recv( int length ) throws IOException, InterruptedException
     {
         int remaining = length;
         byte[] target = new byte[remaining];
@@ -108,6 +108,12 @@ public class SecureWebSocketConnection implements Connection, WebSocketListener
                                             HexPrinter.hex( ByteBuffer.wrap( target ), 0, length - remaining ) );
             }
         }
+    }
+
+    @Override
+    public boolean isConnected()
+    {
+        return client.isRunning();
     }
 
     @Override

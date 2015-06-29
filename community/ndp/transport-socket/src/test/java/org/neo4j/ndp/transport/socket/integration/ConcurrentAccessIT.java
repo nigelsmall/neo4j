@@ -19,11 +19,6 @@
  */
 package org.neo4j.ndp.transport.socket.integration;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
@@ -33,26 +28,36 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import org.hamcrest.TypeSafeMatcher;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+
 import org.neo4j.function.Factory;
 import org.neo4j.helpers.HostnamePort;
 import org.neo4j.ndp.messaging.v1.message.Messages;
 import org.neo4j.ndp.transport.socket.client.Connection;
+import org.neo4j.ndp.transport.socket.client.MiniDriver;
 
 import static java.util.Arrays.asList;
+
 import static org.hamcrest.MatcherAssert.assertThat;
+
 import static org.neo4j.helpers.collection.MapUtil.map;
 import static org.neo4j.ndp.messaging.v1.message.Messages.pullAll;
 import static org.neo4j.ndp.messaging.v1.message.Messages.run;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.acceptedVersions;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.chunk;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.eventuallyRecieves;
 
 /**
- * Multiple concurrent users should be able to connect simultaneously. We test this with multiple users running
+ * Multiple concurrent users should be able to connect simultaneously. We test this with multiple
+ * users running
  * load that they roll back, asserting they don't see each others changes.
  */
-@RunWith( Parameterized.class )
+@RunWith(Parameterized.class)
 public class ConcurrentAccessIT
 {
     @Rule
@@ -97,7 +102,7 @@ public class ConcurrentAccessIT
 
     private List<Callable<Void>> createWorkers( int numWorkers, int numRequests ) throws Exception
     {
-        List<Callable<Void>> workers = new LinkedList<>(  );
+        List<Callable<Void>> workers = new LinkedList<>();
         for ( int i = 0; i < numWorkers; i++ )
         {
             workers.add( newWorker( numRequests ) );
@@ -109,60 +114,79 @@ public class ConcurrentAccessIT
     {
         return new Callable<Void>()
         {
-            private final byte[] initialize = chunk( Messages.initialize( "TestClient" ) );
-            private final byte[] createAndRollback = chunk(
-                    run( "BEGIN" ), pullAll(),
-                    run( "CREATE (n)" ), pullAll(),
-                    run( "ROLLBACK" ), pullAll() );
-
-            private final byte[] matchAll = chunk(
-                    run( "MATCH (n) RETURN n" ), pullAll() );
-
             @Override
             public Void call() throws Exception
             {
                 // Connect
-                Connection client = cf.newInstance();
-                client.connect( address ).send( acceptedVersions( 1, 0, 0, 0 ) );
-                assertThat( client, eventuallyRecieves( new byte[]{0, 0, 0, 1} ) );
-
-                initialize(client);
+                Connection connection = cf.newInstance();
+                connection.connect( address );
+                MiniDriver driver = new MiniDriver( connection );
 
                 for ( int i = 0; i < iterationsToRun; i++ )
                 {
-                    creaeteAndRollback( client );
+                    createAndRollback( driver );
                 }
 
                 return null;
             }
 
-            private void initialize( Connection client ) throws Exception
+            private void createAndRollback( MiniDriver driver ) throws Exception
             {
-                client.send( initialize );
-                assertThat( client, eventuallyRecieves(
-                    msgSuccess()
-                ));
-            }
+                driver
+                        .addRunMessage( "BEGIN" )
+                        .addPullAllMessage()
+                        .addRunMessage( "CREATE (n)" )
+                        .addPullAllMessage()
+                        .addRunMessage( "ROLLBACK" )
+                        .addPullAllMessage()
+                        .send();
 
-            private void creaeteAndRollback(Connection client) throws Exception
-            {
-                client.send( createAndRollback );
-                assertThat( client, eventuallyRecieves(
+                assertThat( driver.recv( 6 ), equalsArray(
                         msgSuccess( map( "fields", asList() ) ),
                         msgSuccess(),
                         msgSuccess( map( "fields", asList() ) ),
                         msgSuccess(),
                         msgSuccess( map( "fields", asList() ) ),
-                        msgSuccess()) );
+                        msgSuccess() ) );
 
                 // Verify no visible data
-                client.send( matchAll );
-                assertThat( client, eventuallyRecieves(
+                driver
+                        .addRunMessage( "MATCH (n) RETURN n" )
+                        .addPullAllMessage()
+                        .send();
+                assertThat( driver.recv( 2 ), equalsArray(
                         msgSuccess( map( "fields", asList( "n" ) ) ),
                         msgSuccess() ) );
 
             }
         };
 
+    }
+
+    @SafeVarargs
+    public static <T> Matcher<T[]> equalsArray( final Matcher<T>... expectedItems )
+    {
+        return new TypeSafeMatcher<T[]>()
+        {
+            @Override
+            protected boolean matchesSafely( T[] items )
+            {
+                for ( int i = 0; i < items.length; i++ )
+                {
+                    if ( !expectedItems[i].matches( items[i] ) )
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public void describeTo( Description description )
+            {
+                description.appendList( "[", ",", "]", asList( expectedItems ) );
+            }
+
+        };
     }
 }

@@ -93,6 +93,12 @@ public class SocketConnection implements Connection
     }
 
     @Override
+    public boolean isConnected()
+    {
+        return socket.isConnected();
+    }
+
+    @Override
     public void close() throws Exception
     {
         disconnect();

@@ -92,7 +92,7 @@ public class TransportTestUtil
         return bb.array();
     }
 
-    public static Matcher<Connection> eventuallyRecieves( final Matcher<Message>... messages )
+    public static Matcher<Connection> eventuallyReceives( final Matcher<Message>... messages )
     {
         return new TypeSafeMatcher<Connection>()
         {
@@ -136,13 +136,13 @@ public class TransportTestUtil
         };
     }
 
-    public static int recvChunkHeader( Connection conn ) throws Exception
+    public static int recvChunkHeader( Connection conn ) throws IOException, InterruptedException
     {
         byte[] raw = conn.recv( 2 );
         return ((raw[0] & 0xff) << 8 | (raw[1] & 0xff)) & 0xffff;
     }
 
-    public static Matcher<Connection> eventuallyRecieves( final byte[] expected )
+    public static Matcher<Connection> eventuallyReceives( final byte[] expected )
     {
         return new TypeSafeMatcher<Connection>()
         {
