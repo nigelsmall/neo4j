@@ -1,3 +1,22 @@
+/*
+ * Copyright (c) 2002-2015 "Neo Technology,"
+ * Network Engine for Objects in Lund AB [http://neotechnology.com]
+ *
+ * This file is part of Neo4j.
+ *
+ * Neo4j is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.neo4j.ndp.transport.socket.client;
 
 import java.io.ByteArrayOutputStream;
@@ -8,6 +27,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+import org.neo4j.ndp.messaging.v1.message.DiscardAllMessage;
 import org.neo4j.ndp.messaging.v1.message.InitializeMessage;
 import org.neo4j.ndp.messaging.v1.message.Message;
 import org.neo4j.ndp.messaging.v1.message.PullAllMessage;
@@ -21,7 +41,7 @@ import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.accep
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.chunk;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.recvChunkHeader;
 
-public class MiniDriver
+public class MiniDriver implements AutoCloseable
 {
     public static final String CLIENT_NAME = "MiniDriver/1.0";
 
@@ -73,7 +93,7 @@ public class MiniDriver
 
     public MiniDriver addRunMessage( String statement )
     {
-        addRunMessage( statement, Collections.<String, Object>emptyMap() );
+        addRunMessage( statement, Collections.<String,Object>emptyMap() );
         return this;
     }
 
@@ -83,11 +103,18 @@ public class MiniDriver
         return this;
     }
 
-    public void send() throws IOException
+    public MiniDriver addDiscardAllMessage()
+    {
+        outbox.add( new DiscardAllMessage() );
+        return this;
+    }
+
+    public MiniDriver send() throws IOException
     {
         Message[] messages = outbox.toArray( new Message[outbox.size()] );
         outbox.clear();
         connection.send( chunk( chunkSize, messages ) );
+        return this;
     }
 
     public Message[] recv( int count ) throws IOException, InterruptedException
@@ -113,4 +140,9 @@ public class MiniDriver
         return messages.toArray(new Message[count]);
     }
 
+    @Override
+    public void close() throws Exception
+    {
+        connection.close();
+    }
 }

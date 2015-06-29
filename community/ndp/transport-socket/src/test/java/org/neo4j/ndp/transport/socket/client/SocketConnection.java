@@ -46,7 +46,7 @@ public class SocketConnection implements Connection
     @Override
     public Connection connect( HostnamePort address ) throws Exception
     {
-        socket.setSoTimeout( 30 * 1000 );
+        socket.setSoTimeout( 300 * 1000 );
 
         socket.connect( new InetSocketAddress( address.getHost(), address.getPort() ) );
         in = socket.getInputStream();

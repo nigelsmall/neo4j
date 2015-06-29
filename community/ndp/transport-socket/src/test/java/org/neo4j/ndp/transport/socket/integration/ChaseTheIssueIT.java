@@ -19,6 +19,11 @@
  */
 package org.neo4j.ndp.transport.socket.integration;
 
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
@@ -28,23 +33,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import org.hamcrest.Description;
-import org.hamcrest.Matcher;
-import org.hamcrest.TypeSafeMatcher;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-
 import org.neo4j.function.Factory;
 import org.neo4j.helpers.HostnamePort;
+import org.neo4j.ndp.messaging.v1.message.Message;
 import org.neo4j.ndp.transport.socket.client.Connection;
 import org.neo4j.ndp.transport.socket.client.MiniDriver;
 
 import static java.util.Arrays.asList;
-
 import static org.hamcrest.MatcherAssert.assertThat;
-
 import static org.neo4j.helpers.collection.MapUtil.map;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.equalsArray;
@@ -76,8 +72,13 @@ public class ChaseTheIssueIT
     public void shouldRunSimpleStatement() throws Throwable
     {
         // Given
-        int numWorkers = 5;
-        int numRequests = 1_000;
+        int numWorkers = 8;
+        int numRequests = 100_000;
+
+        try( MiniDriver driver = newDriver() )
+        {
+            setup(driver);
+        }
 
         List<Callable<Void>> workers = createWorkers( numWorkers, numRequests );
         ExecutorService exec = Executors.newFixedThreadPool( numWorkers );
@@ -97,6 +98,53 @@ public class ChaseTheIssueIT
         }
     }
 
+    private void setup(MiniDriver driver) throws Exception
+    {
+        // Get id generation up to 5-digit range, issue seemed more likely here
+        System.out.print( "Setup" );
+        Message[] msgs = driver.addRunMessage( "FOREACH( n in range(0,10000) | CREATE (:Person) )" )
+                .addDiscardAllMessage()
+                .addRunMessage( "MATCH (n) DELETE n" )
+                .addDiscardAllMessage()
+                .send()
+                .recv( 4 );
+        assertThat( msgs, equalsArray(
+                msgSuccess( map( "fields", asList() ) ),
+                msgSuccess(),
+                msgSuccess( map( "fields", asList() ) ),
+                msgSuccess() ) );
+
+        // Create 1000 nodes to read during the main load part
+        System.out.println( ".." );
+        msgs = driver
+                .addRunMessage( "FOREACH( n in range(0,1000) | CREATE (:Person) )" )
+                .addDiscardAllMessage()
+                .send()
+                .recv( 2 );
+        assertThat( msgs, equalsArray(
+                msgSuccess( map( "fields", asList() ) ),
+                msgSuccess() ) );
+
+        // Warmup
+        System.out.println("Warmup..");
+        for ( int i = 0; i < 1500; i++ )
+        {
+            driver.addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
+                  .addPullAllMessage()
+                  .send()
+                  .recv( 502 );
+        }
+        System.out.println("Running.");
+    }
+
+    private static void useCase( MiniDriver driver ) throws Exception
+    {
+        driver.addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
+            .addPullAllMessage()
+            .send()
+            .recv( 502 );
+    }
+
     private List<Callable<Void>> createWorkers( int numWorkers, int numRequests ) throws Exception
     {
         List<Callable<Void>> workers = new LinkedList<>();
@@ -114,50 +162,24 @@ public class ChaseTheIssueIT
             @Override
             public Void call() throws Exception
             {
-                // Connect
-                Connection connection = cf.newInstance();
-                connection.connect( address );
-                MiniDriver driver = new MiniDriver( connection );
+                MiniDriver driver = newDriver();
 
                 for ( int i = 0; i < iterationsToRun; i++ )
                 {
-                    createAndRollback( driver );
+                    useCase( driver );
                 }
 
                 return null;
             }
-
-            private void createAndRollback( MiniDriver driver ) throws Exception
-            {
-                driver
-                        .addRunMessage( "BEGIN" )
-                        .addPullAllMessage()
-                        .addRunMessage( "CREATE (n)" )
-                        .addPullAllMessage()
-                        .addRunMessage( "ROLLBACK" )
-                        .addPullAllMessage()
-                        .send();
-
-                assertThat( driver.recv( 6 ), equalsArray(
-                        msgSuccess( map( "fields", asList() ) ),
-                        msgSuccess(),
-                        msgSuccess( map( "fields", asList() ) ),
-                        msgSuccess(),
-                        msgSuccess( map( "fields", asList() ) ),
-                        msgSuccess() ) );
-
-                // Verify no visible data
-                driver
-                        .addRunMessage( "MATCH (n) RETURN n" )
-                        .addPullAllMessage()
-                        .send();
-                assertThat( driver.recv( 2 ), equalsArray(
-                        msgSuccess( map( "fields", asList( "n" ) ) ),
-                        msgSuccess() ) );
-
-            }
         };
 
+    }
+
+    private MiniDriver newDriver() throws Exception
+    {
+        Connection connection = cf.newInstance();
+        connection.connect( address );
+        return new MiniDriver( connection );
     }
 
 }
