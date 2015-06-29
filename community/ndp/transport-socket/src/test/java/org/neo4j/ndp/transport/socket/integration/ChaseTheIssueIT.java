@@ -38,7 +38,6 @@ import org.junit.runners.Parameterized;
 
 import org.neo4j.function.Factory;
 import org.neo4j.helpers.HostnamePort;
-import org.neo4j.ndp.messaging.v1.message.Messages;
 import org.neo4j.ndp.transport.socket.client.Connection;
 import org.neo4j.ndp.transport.socket.client.MiniDriver;
 
@@ -47,10 +46,7 @@ import static java.util.Arrays.asList;
 import static org.hamcrest.MatcherAssert.assertThat;
 
 import static org.neo4j.helpers.collection.MapUtil.map;
-import static org.neo4j.ndp.messaging.v1.message.Messages.pullAll;
-import static org.neo4j.ndp.messaging.v1.message.Messages.run;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.chunk;
 import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.equalsArray;
 
 /**
@@ -59,7 +55,7 @@ import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.equal
  * load that they roll back, asserting they don't see each others changes.
  */
 @RunWith(Parameterized.class)
-public class ConcurrentAccessIT
+public class ChaseTheIssueIT
 {
     @Rule
     public Neo4jWithSocket server = new Neo4jWithSocket();

@@ -33,6 +33,8 @@ import org.neo4j.ndp.messaging.v1.message.Message;
 import org.neo4j.ndp.transport.socket.client.Connection;
 
 import static java.nio.ByteOrder.BIG_ENDIAN;
+import static java.util.Arrays.asList;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.message;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.serialize;
@@ -164,6 +166,34 @@ public class TransportTestUtil
             {
                 description.appendValueList( "RawBytes[", ",", "]", expected );
             }
+        };
+    }
+
+
+    @SafeVarargs
+    public static <T> Matcher<T[]> equalsArray( final Matcher<T>... expectedItems )
+    {
+        return new TypeSafeMatcher<T[]>()
+        {
+            @Override
+            protected boolean matchesSafely( T[] items )
+            {
+                for ( int i = 0; i < items.length; i++ )
+                {
+                    if ( !expectedItems[i].matches( items[i] ) )
+                    {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public void describeTo( Description description )
+            {
+                description.appendList( "[", ",", "]", asList( expectedItems ) );
+            }
+
         };
     }
 }
