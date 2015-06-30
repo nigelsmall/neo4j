@@ -19,11 +19,6 @@
  */
 package org.neo4j.ndp.transport.socket.integration;
 
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
@@ -33,17 +28,26 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
+
 import org.neo4j.function.Factory;
 import org.neo4j.helpers.HostnamePort;
 import org.neo4j.ndp.messaging.v1.message.Message;
+import org.neo4j.ndp.messaging.v1.message.RecordMessage;
 import org.neo4j.ndp.transport.socket.client.Connection;
 import org.neo4j.ndp.transport.socket.client.MiniDriver;
 
 import static java.util.Arrays.asList;
+
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.core.IsInstanceOf.instanceOf;
+
 import static org.neo4j.helpers.collection.MapUtil.map;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.equalsArray;
+import static org.neo4j.ndp.transport.socket.client.MiniDriver.equalsArray;
 
 /**
  * Multiple concurrent users should be able to connect simultaneously. We test this with multiple
@@ -75,11 +79,12 @@ public class ChaseTheIssueIT
         int numWorkers = 8;
         int numRequests = 10_000;
 
-        for ( int i = 0; i < 1000; i++ )
+        for ( int i = 1; i <= 1; i++ )
         {
-            try( MiniDriver driver = newDriver() )
+            System.out.println("Run number " + i);
+            try ( MiniDriver driver = newDriver() )
             {
-                setup(driver);
+                setup( driver );
             }
 
             List<Callable<Void>> workers = createWorkers( numWorkers, numRequests );
@@ -98,14 +103,18 @@ public class ChaseTheIssueIT
                 exec.shutdownNow();
                 exec.awaitTermination( 30, TimeUnit.SECONDS );
             }
+
+            System.out.println();
+
         }
     }
 
-    private void setup(MiniDriver driver) throws Exception
+    private void setup( MiniDriver driver ) throws Exception
     {
         // Get id generation up to 5-digit range, issue seemed more likely here
-        System.out.print( "Setup" );
-        Message[] msgs = driver.addRunMessage( "FOREACH( n in range(0,10000) | CREATE (:Person) )" )
+        System.out.print( "  Setting up" );
+        Message[] msgs = driver
+                .addRunMessage( "FOREACH( n in range(0,10000) | CREATE (:Person) )" )
                 .addDiscardAllMessage()
                 .addRunMessage( "MATCH (n) DELETE n" )
                 .addDiscardAllMessage()
@@ -116,9 +125,9 @@ public class ChaseTheIssueIT
                 msgSuccess(),
                 msgSuccess( map( "fields", asList() ) ),
                 msgSuccess() ) );
+        System.out.print( '.' );
 
         // Create 1000 nodes to read during the main load part
-        System.out.println( ".." );
         msgs = driver
                 .addRunMessage( "FOREACH( n in range(0,1000) | CREATE (:Person) )" )
                 .addDiscardAllMessage()
@@ -127,50 +136,66 @@ public class ChaseTheIssueIT
         assertThat( msgs, equalsArray(
                 msgSuccess( map( "fields", asList() ) ),
                 msgSuccess() ) );
+        System.out.println( '.' );
 
         // Warmup
-        System.out.println("Warmup..");
-        for ( int i = 0; i < 1500; i++ )
+        System.out.print( "  Warming up" );
+        for ( int i = 1; i <= 1500; i++ )
         {
-            driver.addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
-                  .addPullAllMessage()
-                  .send()
-                  .recv( 502 );
+            driver
+                    .addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
+                    .addPullAllMessage()
+                    .send()
+                    .recv( 502 );
+            if (i % 150 == 0) {
+                System.out.print('.');
+            }
         }
-        System.out.println("Running.");
+        System.out.println();
     }
 
     private static void useCase( MiniDriver driver ) throws Exception
     {
-        driver.addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
-            .addPullAllMessage()
-            .send()
-            .recv( 502 );
+        Message[] msgs = driver
+                .addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
+                .addPullAllMessage()
+                .send()
+                .recv( 502 );
+        assertThat( msgs[0], msgSuccess( map( "fields", asList( "a" ) ) ) );
+        for(int i = 1; i <= 500; i++) {
+            assertThat( msgs[501], instanceOf( RecordMessage.class ) );
+        }
+        assertThat( msgs[501], msgSuccess( map() ) );
     }
 
     private List<Callable<Void>> createWorkers( int numWorkers, int numRequests ) throws Exception
     {
         List<Callable<Void>> workers = new LinkedList<>();
-        for ( int i = 0; i < numWorkers; i++ )
+        for ( int i = 1; i <= numWorkers; i++ )
         {
-            workers.add( newWorker( numRequests ) );
+            workers.add( newWorker( i, numRequests ) );
         }
         return workers;
     }
 
-    private Callable<Void> newWorker( final int iterationsToRun ) throws Exception
+    private Callable<Void> newWorker( final int workerNumber, final int iterationsToRun )
+            throws Exception
     {
         return new Callable<Void>()
         {
             @Override
             public Void call() throws Exception
             {
+                System.out.println("  Starting worker " + workerNumber);
+
                 MiniDriver driver = newDriver();
 
                 for ( int i = 0; i < iterationsToRun; i++ )
                 {
                     useCase( driver );
                 }
+
+                System.out.println("  Worker " + workerNumber + " completed");
 
                 return null;
             }
@@ -180,9 +205,7 @@ public class ChaseTheIssueIT
 
     private MiniDriver newDriver() throws Exception
     {
-        Connection connection = cf.newInstance();
-        connection.connect( address );
-        return new MiniDriver( connection );
+        return MiniDriver.forConnection( cf.newInstance().connect( address ) );
     }
 
 }

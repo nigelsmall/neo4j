@@ -28,9 +28,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import org.hamcrest.Description;
-import org.hamcrest.Matcher;
-import org.hamcrest.TypeSafeMatcher;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -38,7 +35,6 @@ import org.junit.runners.Parameterized;
 
 import org.neo4j.function.Factory;
 import org.neo4j.helpers.HostnamePort;
-import org.neo4j.ndp.messaging.v1.message.Messages;
 import org.neo4j.ndp.transport.socket.client.Connection;
 import org.neo4j.ndp.transport.socket.client.MiniDriver;
 
@@ -47,11 +43,10 @@ import static java.util.Arrays.asList;
 import static org.hamcrest.MatcherAssert.assertThat;
 
 import static org.neo4j.helpers.collection.MapUtil.map;
-import static org.neo4j.ndp.messaging.v1.message.Messages.pullAll;
 import static org.neo4j.ndp.messaging.v1.message.Messages.run;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.chunk;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.equalsArray;
+import static org.neo4j.ndp.transport.socket.client.MiniDriver.chunk;
+import static org.neo4j.ndp.transport.socket.client.MiniDriver.equalsArray;
 
 /**
  * Multiple concurrent users should be able to connect simultaneously. We test this with multiple
@@ -119,9 +114,7 @@ public class ConcurrentAccessIT
             public Void call() throws Exception
             {
                 // Connect
-                Connection connection = cf.newInstance();
-                connection.connect( address );
-                MiniDriver driver = new MiniDriver( connection );
+                MiniDriver driver = MiniDriver.forConnection( cf.newInstance().connect( address ) );
 
                 for ( int i = 0; i < iterationsToRun; i++ )
                 {

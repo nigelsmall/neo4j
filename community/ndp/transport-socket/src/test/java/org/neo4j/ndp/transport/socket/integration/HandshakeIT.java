@@ -40,14 +40,8 @@ import static java.util.Arrays.asList;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.MatcherAssert.assertThat;
 
-import static org.neo4j.helpers.collection.MapUtil.map;
-import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgRecord;
-import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
-import static org.neo4j.ndp.transport.socket.client.MiniDriver.equalsArray;
-import static org.neo4j.runtime.internal.runner.StreamMatchers.eqRecord;
-
 @RunWith(Parameterized.class)
-public class TransportSessionIT
+public class HandshakeIT
 {
     @Rule
     public Neo4jWithSocket server = new Neo4jWithSocket();
@@ -89,27 +83,69 @@ public class TransportSessionIT
     }
 
     @Test
-    public void shouldRunSimpleStatement() throws Throwable
+    public void shouldBeAbleToNegotiatePreferredProtocolVersion() throws Throwable
     {
         // When
-        driver
-                .addRunMessage( "UNWIND [1,2,3] AS a RETURN a, a * a AS a_squared" )
-                .addPullAllMessage()
-                .send();
+        driver.handshake( 1, 0, 0, 0 );
 
         // Then
-        assertThat( driver.recv( 5 ), equalsArray(
-                msgSuccess( map( "fields", asList( "a", "a_squared" ) ) ),
-                msgRecord( eqRecord( equalTo( 1l ), equalTo( 1l ) ) ),
-                msgRecord( eqRecord( equalTo( 2l ), equalTo( 4l ) ) ),
-                msgRecord( eqRecord( equalTo( 3l ), equalTo( 9l ) ) ),
-                msgSuccess() ) );
+        assertThat( driver.protocolVersion(), equalTo( 1 ) );
+    }
+
+    @Test
+    public void shouldBeAbleToNegotiateSecondBestProtocolVersion() throws Throwable
+    {
+        // When
+        driver.handshake( 0, 1, 0, 0 );
+
+        // Then
+        assertThat( driver.protocolVersion(), equalTo( 1 ) );
+    }
+
+    @Test
+    public void shouldBeAbleToNegotiateThirdBestProtocolVersion() throws Throwable
+    {
+        // When
+        driver.handshake( 0, 0, 1, 0 );
+
+        // Then
+        assertThat( driver.protocolVersion(), equalTo( 1 ) );
+    }
+
+    @Test
+    public void shouldBeAbleToNegotiateFourthBestProtocolVersion() throws Throwable
+    {
+        // When
+        driver.handshake( 0, 0, 0, 1 );
+
+        // Then
+        assertThat( driver.protocolVersion(), equalTo( 1 ) );
+    }
+
+    @Test
+    public void shouldReturnZeroOnZeroInput() throws Throwable
+    {
+        // When
+        driver.handshake( 0, 0, 0, 0 );
+
+        // Then
+        assertThat( driver.protocolVersion(), equalTo( 0 ) );
+    }
+
+    @Test
+    public void shouldReturnNilOnNoApplicableVersion() throws Throwable
+    {
+        // When
+        driver.handshake( 1337, 0, 0, 0 );
+
+        // Then
+        assertThat( driver.protocolVersion(), equalTo( 0 ) );
     }
 
     @Before
     public void setup() throws Exception
     {
-        driver = MiniDriver.forConnection( cf.newInstance().connect( address ) );
+        driver = new MiniDriver( cf.newInstance().connect( address ) );
     }
 
     @After

@@ -19,6 +19,14 @@
  */
 package org.neo4j.ndp.transport.socket.integration;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collection;
+
+import org.hamcrest.Description;
+import org.hamcrest.Matcher;
+import org.hamcrest.TypeSafeMatcher;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -26,26 +34,26 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
-import java.util.Arrays;
-import java.util.Collection;
-
 import org.neo4j.function.Factory;
 import org.neo4j.helpers.HostnamePort;
 import org.neo4j.kernel.api.exceptions.Status;
 import org.neo4j.ndp.messaging.v1.PackStreamMessageFormatV1;
 import org.neo4j.ndp.messaging.v1.RecordingByteChannel;
+import org.neo4j.ndp.messaging.v1.message.Message;
 import org.neo4j.ndp.runtime.internal.Neo4jError;
 import org.neo4j.ndp.transport.socket.client.Connection;
+import org.neo4j.ndp.transport.socket.client.MiniDriver;
 import org.neo4j.packstream.BufferedChannelOutput;
 import org.neo4j.packstream.PackStream;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+
 import static org.neo4j.ndp.messaging.v1.message.Messages.run;
+import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.message;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgFailure;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.serialize;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.acceptedVersions;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.chunk;
-import static org.neo4j.ndp.transport.socket.integration.TransportTestUtil.eventuallyReceives;
+import static org.neo4j.ndp.transport.socket.client.MiniDriver.chunk;
+import static org.neo4j.ndp.transport.socket.integration.TransportErrorIT.eventuallyReceives;
 
 @RunWith( Parameterized.class )
 public class TransportErrorIT
@@ -59,12 +67,88 @@ public class TransportErrorIT
     @Parameterized.Parameter(1)
     public HostnamePort address;
 
-    private Connection client;
+    private MiniDriver driver;
 
     @Parameterized.Parameters
     public static Collection<Object[]> transports()
     {
         return TransportSessionIT.transports();
+    }
+
+    @SafeVarargs
+    public static Matcher<Connection> eventuallyReceives( final Matcher<Message>... messages )
+    {
+        return new TypeSafeMatcher<Connection>()
+        {
+            @Override
+            protected boolean matchesSafely( Connection conn )
+            {
+                try
+                {
+                    int messageNo = 0;
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    while ( messageNo < messages.length )
+                    {
+                        int size = recvChunkHeader( conn );
+
+                        if ( size > 0 )
+                        {
+                            out.write( conn.recv( size ) );
+                        }
+                        else
+                        {
+                            Message message = message( out.toByteArray() );
+                            assertThat( message, messages[messageNo] );
+                            out = new ByteArrayOutputStream();
+                            messageNo++;
+                        }
+                    }
+
+                    return true;
+                }
+                catch ( Exception e )
+                {
+                    throw new RuntimeException( e );
+                }
+            }
+
+            @Override
+            public void describeTo( Description description )
+            {
+                description.appendValueList( "Messages[", ",", "]", messages );
+            }
+        };
+    }
+
+    public static int recvChunkHeader( Connection conn ) throws IOException, InterruptedException
+    {
+        byte[] raw = conn.recv( 2 );
+        return ((raw[0] & 0xff) << 8 | (raw[1] & 0xff)) & 0xffff;
+    }
+
+    public static Matcher<Connection> eventuallyReceives( final byte[] expected )
+    {
+        return new TypeSafeMatcher<Connection>()
+        {
+            @Override
+            protected boolean matchesSafely( Connection item )
+            {
+                try
+                {
+                    return Arrays.equals( item.recv( expected.length ), expected );
+                }
+                catch ( Exception e )
+                {
+                    throw new RuntimeException( e );
+                }
+            }
+
+            @Override
+            public void describeTo( Description description )
+            {
+                description.appendValueList( "RawBytes[", ",", "]", expected );
+            }
+        };
     }
 
     @Test
@@ -75,13 +159,10 @@ public class TransportErrorIT
         truncated = Arrays.copyOf(truncated, truncated.length - 12);
 
         // When
-        client.connect( address )
-                .send( acceptedVersions( 1, 0, 0, 0 ) )
-                .send( chunk( 32, truncated ) );
+        driver.connection().send( chunk( 32, truncated ) );
 
         // Then
-        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, TransportTestUtil.eventuallyReceives(
+        assertThat( driver.connection(), eventuallyReceives(
                 msgFailure( new Neo4jError( Status.Request.InvalidFormat,
                         "Unable to deserialize request, message boundary found before message " +
                                 "ended. This indicates " +
@@ -103,13 +184,10 @@ public class TransportErrorIT
         byte[] invalidMessage = rawData.getBytes();
 
         // When
-        client.connect( address )
-                .send( acceptedVersions( 1, 0, 0, 0 ) )
-                .send( chunk( 32, invalidMessage ) );
+        driver.connection().send( chunk( 32, invalidMessage ) );
 
         // Then
-        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, TransportTestUtil.eventuallyReceives(
+        assertThat( driver.connection(), eventuallyReceives(
                 msgFailure( new Neo4jError( Status.Request.InvalidFormat,
                         "Unable to read MSG_RUN message. Error was: Wrong type received. Expected" +
                                 " MAP, received: " +
@@ -130,14 +208,12 @@ public class TransportErrorIT
         byte[] invalidMessage = rawData.getBytes();
 
         // When
-        client.connect( address )
-                .send( acceptedVersions( 1, 0, 0, 0 ) )
-                .send( chunk( 32, invalidMessage ) );
+        driver.connection().send( chunk( 32, invalidMessage ) );
 
         // Then
-        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, TransportTestUtil.eventuallyReceives(
-                msgFailure( new Neo4jError( Status.Request.Invalid, "0x66 is not a valid message type." ) ) ) );
+        assertThat( driver.connection(), eventuallyReceives(
+                msgFailure( new Neo4jError( Status.Request.Invalid, "0x66 is not a valid message " +
+                        "type." ) ) ) );
     }
 
     @Test
@@ -155,27 +231,25 @@ public class TransportErrorIT
         byte[] invalidMessage = rawData.getBytes();
 
         // When
-        client.connect( address )
-                .send( acceptedVersions( 1, 0, 0, 0 ) )
-                .send( chunk( 32, invalidMessage ) );
+        driver.connection().send( chunk( 32, invalidMessage ) );
 
         // Then
-        assertThat( client, eventuallyReceives( new byte[]{0, 0, 0, 1} ) );
-        assertThat( client, TransportTestUtil.eventuallyReceives(
+        assertThat( driver.connection(), eventuallyReceives(
                 msgFailure( new Neo4jError( Status.Request.InvalidFormat,
-                        "Unable to read MSG_RUN message. Error was: Wrong type received. Expected TEXT, received: " +
+                        "Unable to read MSG_RUN message. Error was: Wrong type received. Expected" +
+                                " TEXT, received: " +
                                 "RESERVED (0xff)." ) ) ) );
     }
 
     @Before
-    public void setup()
+    public void setup() throws Exception
     {
-        this.client = cf.newInstance();
+        driver = MiniDriver.forConnection( cf.newInstance().connect( address ) );
     }
 
     @After
     public void teardown() throws Exception
     {
-        if(client != null) client.disconnect();
+        if(driver != null) driver.close();
     }
 }
