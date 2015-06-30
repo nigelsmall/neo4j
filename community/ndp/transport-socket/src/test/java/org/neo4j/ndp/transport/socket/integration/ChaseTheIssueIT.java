@@ -73,28 +73,31 @@ public class ChaseTheIssueIT
     {
         // Given
         int numWorkers = 8;
-        int numRequests = 100_000;
+        int numRequests = 10_000;
 
-        try( MiniDriver driver = newDriver() )
+        for ( int i = 0; i < 1000; i++ )
         {
-            setup(driver);
-        }
-
-        List<Callable<Void>> workers = createWorkers( numWorkers, numRequests );
-        ExecutorService exec = Executors.newFixedThreadPool( numWorkers );
-
-        try
-        {
-            // When & then
-            for ( Future<Void> f : exec.invokeAll( workers ) )
+            try( MiniDriver driver = newDriver() )
             {
-                f.get( 60, TimeUnit.SECONDS );
+                setup(driver);
             }
-        }
-        finally
-        {
-            exec.shutdownNow();
-            exec.awaitTermination( 30, TimeUnit.SECONDS );
+
+            List<Callable<Void>> workers = createWorkers( numWorkers, numRequests );
+            ExecutorService exec = Executors.newFixedThreadPool( numWorkers );
+
+            try
+            {
+                // When & then
+                for ( Future<Void> f : exec.invokeAll( workers ) )
+                {
+                    f.get( 60, TimeUnit.SECONDS );
+                }
+            }
+            finally
+            {
+                exec.shutdownNow();
+                exec.awaitTermination( 30, TimeUnit.SECONDS );
+            }
         }
     }
 
