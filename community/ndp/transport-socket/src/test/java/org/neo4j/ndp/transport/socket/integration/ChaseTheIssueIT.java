@@ -163,7 +163,7 @@ public class ChaseTheIssueIT
                 .recv( 502 );
         assertThat( msgs[0], msgSuccess( map( "fields", asList( "a" ) ) ) );
         for(int i = 1; i <= 500; i++) {
-            assertThat( msgs[501], instanceOf( RecordMessage.class ) );
+            assertThat( msgs[i], instanceOf( RecordMessage.class ) );
         }
         assertThat( msgs[501], msgSuccess( map() ) );
     }
