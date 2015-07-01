@@ -109,7 +109,7 @@ public class MiniServer
      */
     public static void main( String... args ) throws Exception
     {
-        new MiniServer().withStore( new File("/home/nigel/alpha/neo4j-enterprise-3.0.0-alpha.61/data/graph.db") ).run();
+        new MiniServer().run();
     }
 
 }
