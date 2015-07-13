@@ -76,7 +76,7 @@ public class ChaseTheIssueIT
     public void shouldRunSimpleStatement() throws Throwable
     {
         // Given
-        int numWorkers = 8;
+        int numWorkers = 1;
         int numRequests = 10_000;
 
         for ( int i = 1; i <= 1; i++ )
@@ -111,39 +111,13 @@ public class ChaseTheIssueIT
 
     private void setup( MiniDriver driver ) throws Exception
     {
-        // Get id generation up to 5-digit range, issue seemed more likely here
-        System.out.print( "  Setting up" );
-        Message[] msgs = driver
-                .addRunMessage( "FOREACH( n in range(0,10000) | CREATE (:Person) )" )
-                .addDiscardAllMessage()
-                .addRunMessage( "MATCH (n) DELETE n" )
-                .addDiscardAllMessage()
-                .send()
-                .recv( 4 );
-        assertThat( msgs, equalsArray(
-                msgSuccess( map( "fields", asList() ) ),
-                msgSuccess(),
-                msgSuccess( map( "fields", asList() ) ),
-                msgSuccess() ) );
-        System.out.print( '.' );
-
-        // Create 1000 nodes to read during the main load part
-        msgs = driver
-                .addRunMessage( "FOREACH( n in range(0,1000) | CREATE (:Person) )" )
-                .addDiscardAllMessage()
-                .send()
-                .recv( 2 );
-        assertThat( msgs, equalsArray(
-                msgSuccess( map( "fields", asList() ) ),
-                msgSuccess() ) );
-        System.out.println( '.' );
 
         // Warmup
         System.out.print( "  Warming up" );
         for ( int i = 1; i <= 1500; i++ )
         {
             driver
-                    .addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
+                    .addRunMessage( "unwind range(1,500) as z return [z,z,z,z,z,z,z] as zzz" )
                     .addPullAllMessage()
                     .send()
                     .recv( 502 );
@@ -157,11 +131,11 @@ public class ChaseTheIssueIT
     private static void useCase( MiniDriver driver ) throws Exception
     {
         Message[] msgs = driver
-                .addRunMessage( "MATCH (a:Person) RETURN a LIMIT 500" )
+                .addRunMessage( "unwind range(1,500) as z return [z,z,z,z,z,z,z] as zzz" )
                 .addPullAllMessage()
                 .send()
                 .recv( 502 );
-        assertThat( msgs[0], msgSuccess( map( "fields", asList( "a" ) ) ) );
+        assertThat( msgs[0], msgSuccess( map( "fields", asList( "zzz" ) ) ) );
         for(int i = 1; i <= 500; i++) {
             assertThat( msgs[i], instanceOf( RecordMessage.class ) );
         }
