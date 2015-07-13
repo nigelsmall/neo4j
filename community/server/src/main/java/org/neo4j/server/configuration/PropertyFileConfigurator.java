@@ -24,17 +24,15 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.neo4j.graphdb.factory.GraphDatabaseSettings;
 import org.neo4j.helpers.collection.MapUtil;
 import org.neo4j.kernel.configuration.Config;
 import org.neo4j.logging.Log;
 import org.neo4j.server.web.ServerInternalSettings;
 
-import static java.util.Arrays.asList;
 
-//TODO put the server and db configuration file into one file per database.
-// the configuration for each db could either be passed from the server or created locally
-// if no server (server config) is specified.
+/**
+ * @deprecated this will be removed in the next major version of Neo4j
+ */
 public class PropertyFileConfigurator implements ConfigurationBuilder
 {
     private final Config serverConfig;
@@ -55,14 +53,7 @@ public class PropertyFileConfigurator implements ConfigurationBuilder
         loadServerProperties( propertiesFile, log );
         loadDatabaseTuningProperties( propertiesFile, log );
 
-        serverConfig = new Config( serverProperties );
-        setServerSettingsClasses( serverConfig );
-    }
-
-    public static void setServerSettingsClasses( Config config )
-    {
-        config.registerSettingsClasses( asList( ServerSettings.class,
-                ServerInternalSettings.class, GraphDatabaseSettings.class ) );
+        serverConfig = new Config( serverProperties, ServerConfigFactory.getDefaultSettingsClasses() );
     }
 
     @Override

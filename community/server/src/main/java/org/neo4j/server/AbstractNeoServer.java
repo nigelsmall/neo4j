@@ -27,9 +27,7 @@ import java.net.URI;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import javax.servlet.Filter;
 
 import org.neo4j.function.Function;
@@ -38,7 +36,6 @@ import org.neo4j.graphdb.DependencyResolver;
 import org.neo4j.graphdb.factory.GraphDatabaseSettings;
 import org.neo4j.helpers.Clock;
 import org.neo4j.helpers.RunCarefully;
-import org.neo4j.helpers.Settings;
 import org.neo4j.kernel.configuration.Config;
 import org.neo4j.kernel.guard.Guard;
 import org.neo4j.kernel.impl.factory.GraphDatabaseFacadeFactory;
@@ -66,8 +63,6 @@ import org.neo4j.server.modules.RESTApiModule;
 import org.neo4j.server.modules.ServerModule;
 import org.neo4j.server.plugins.PluginInvocatorProvider;
 import org.neo4j.server.plugins.PluginManager;
-import org.neo4j.server.preflight.PreFlightTasks;
-import org.neo4j.server.preflight.PreflightFailedException;
 import org.neo4j.server.rest.paging.LeaseManager;
 import org.neo4j.server.rest.repr.InputFormatProvider;
 import org.neo4j.server.rest.repr.OutputFormatProvider;
@@ -82,14 +77,13 @@ import org.neo4j.server.rrd.RrdDbProvider;
 import org.neo4j.server.rrd.RrdFactory;
 import org.neo4j.server.security.auth.AuthManager;
 import org.neo4j.server.security.auth.FileUserRepository;
+import org.neo4j.server.security.ssl.Certificates;
 import org.neo4j.server.security.ssl.KeyStoreFactory;
 import org.neo4j.server.security.ssl.KeyStoreInformation;
-import org.neo4j.server.security.ssl.Certificates;
 import org.neo4j.server.web.ServerInternalSettings;
 import org.neo4j.server.web.SimpleUriBuilder;
 import org.neo4j.server.web.WebServer;
 import org.neo4j.server.web.WebServerProvider;
-import org.neo4j.shell.ShellSettings;
 
 import static java.lang.Math.round;
 import static java.lang.String.format;
@@ -97,6 +91,8 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.neo4j.helpers.Clock.SYSTEM_CLOCK;
 import static org.neo4j.helpers.collection.Iterables.map;
 import static org.neo4j.kernel.impl.util.JobScheduler.Groups.serverTransactionTimeout;
+import static org.neo4j.server.configuration.ServerSettings.http_log_config_file;
+import static org.neo4j.server.configuration.ServerSettings.http_logging_enabled;
 import static org.neo4j.server.database.InjectableProvider.providerForSingleton;
 
 /**
@@ -114,16 +110,13 @@ public abstract class AbstractNeoServer implements NeoServer
      */
     private static final long ROUNDING_SECOND = 1000L;
 
-    protected final ConfigurationBuilder configurator;
     protected final LogProvider logProvider;
     protected final Log log;
 
-    private final PreFlightTasks preFlight;
-
     private final List<ServerModule> serverModules = new ArrayList<>();
     private final SimpleUriBuilder uriBuilder = new SimpleUriBuilder();
-    private final Config dbConfig;
     private final LifeSupport life = new LifeSupport();
+    private Config config;
 
     protected Database database;
     protected CypherExecutor cypherExecutor;
@@ -140,28 +133,25 @@ public abstract class AbstractNeoServer implements NeoServer
     private TransactionFacade transactionFacade;
     private TransactionHandleRegistry transactionRegistry;
 
-    protected abstract PreFlightTasks createPreflightTasks();
-
     protected abstract Iterable<ServerModule> createServerModules();
 
     protected abstract WebServer createWebServer();
 
-    public AbstractNeoServer( ConfigurationBuilder configurator, Database.Factory dbFactory, GraphDatabaseFacadeFactory.Dependencies dependencies, LogProvider logProvider )
+    public AbstractNeoServer( Config config, Database.Factory dbFactory,
+            GraphDatabaseFacadeFactory.Dependencies dependencies, LogProvider logProvider )
     {
-        this.configurator = configurator;
+        this.config = config;
         this.logProvider = logProvider;
         this.log = logProvider.getLog( getClass() );
 
-        this.dbConfig = new Config();
-        this.database = life.add( dependencyResolver.satisfyDependency(dbFactory.newDatabase( dbConfig, dependencies)) );
+        this.database = life.add( dependencyResolver.satisfyDependency(dbFactory.newDatabase( config, dependencies)) );
 
-        FileUserRepository users = life.add( new FileUserRepository( configurator.configuration().get( ServerInternalSettings.auth_store ).toPath(), logProvider ) );
+        FileUserRepository users = life.add( new FileUserRepository( config.get( ServerInternalSettings.auth_store ).toPath(), logProvider ) );
 
-        this.authManager = life.add(new AuthManager( users, Clock.SYSTEM_CLOCK, configurator.configuration().get( ServerSettings.auth_enabled ) ));
-        this.preFlight = dependencyResolver.satisfyDependency(createPreflightTasks());
+        this.authManager = life.add(new AuthManager( users, Clock.SYSTEM_CLOCK, config.get( ServerSettings.auth_enabled ) ));
         this.webServer = createWebServer();
 
-        this.keyStoreInfo = initHttpsKeyStore();
+        this.keyStoreInfo = createKeyStore();
 
         for ( ServerModule moduleClass : createServerModules() )
         {
@@ -178,55 +168,38 @@ public abstract class AbstractNeoServer implements NeoServer
     @Override
     public void start() throws ServerStartupException
     {
-        InterruptThreadTimer interruptStartupTimer =
-                dependencyResolver.satisfyDependency( createInterruptStartupTimer() );
-
         try
         {
-            // Pre-flight tasks run outside the boot timeout limit
-            runPreflightTasks();
+            life.start();
+            
+            DiagnosticsManager diagnosticsManager = resolveDependency(DiagnosticsManager.class);
 
-            interruptStartupTimer.startCountdown();
+            Log diagnosticsLog = diagnosticsManager.getTargetLog();
+            diagnosticsLog.info( "--- SERVER STARTED START ---" );
 
-            try
+            databaseActions = createDatabaseActions();
+
+            if(getConfig().get( ServerInternalSettings.webadmin_enabled ))
             {
-                this.dbConfig.applyChanges( reloadConfigFromDisk() );
-
-                life.start();
-
-                DiagnosticsManager diagnosticsManager = resolveDependency(DiagnosticsManager.class);
-
-                Log diagnosticsLog = diagnosticsManager.getTargetLog();
-                diagnosticsLog.info( "--- SERVER STARTED START ---" );
-
-                databaseActions = createDatabaseActions();
-
-                if(getConfig().get( ServerInternalSettings.webadmin_enabled ))
-                {
-                    // TODO: RrdDb is not needed once we remove the old webadmin
-                    rrdDbScheduler = new RoundRobinJobScheduler( logProvider );
-                    rrdDbWrapper = new RrdFactory( configurator.configuration(), logProvider )
-                            .createRrdDbAndSampler( database, rrdDbScheduler );
-                }
-
-                transactionFacade = createTransactionalActions();
-
-                cypherExecutor = new CypherExecutor( database );
-
-                configureWebServer();
-
-                cypherExecutor.start();
-
-                startModules();
-
-                startWebServer();
-
-                diagnosticsLog.info( "--- SERVER STARTED END ---" );
+                // TODO: RrdDb is not needed once we remove the old webadmin
+                rrdDbScheduler = new RoundRobinJobScheduler( logProvider );
+                rrdDbWrapper = new RrdFactory( config, logProvider )
+                        .createRrdDbAndSampler( database, rrdDbScheduler );
             }
-            finally
-            {
-                interruptStartupTimer.stopCountdown();
-            }
+
+            transactionFacade = createTransactionalActions();
+
+            cypherExecutor = new CypherExecutor( database );
+
+            configureWebServer();
+
+            cypherExecutor.start();
+
+            startModules();
+
+            startWebServer();
+
+            diagnosticsLog.info( "--- SERVER STARTED END ---" );
         }
         catch ( Throwable t )
         {
@@ -236,43 +209,7 @@ public abstract class AbstractNeoServer implements NeoServer
             // If the database has been started, attempt to cleanly shut it down to avoid unclean shutdowns.
             life.shutdown();
 
-            // Guard against poor operating systems that don't clear interrupt flags
-            // after having handled interrupts (looking at you, Bill).
-            Thread.interrupted();
-            if ( interruptStartupTimer.wasTriggered() )
-            {
-                throw new ServerStartupException(
-                        "Startup took longer than " + interruptStartupTimer.getTimeoutMillis() + "ms, " +
-                                "and was stopped. You can disable this behavior by setting '" + ServerInternalSettings.startup_timeout.name() + "' to 0.",
-                        1 );
-            }
-
             throw new ServerStartupException( format( "Starting Neo4j Server failed: %s", t.getMessage() ), t );
-        }
-    }
-
-    private Map<String, String> reloadConfigFromDisk()
-    {
-        Map<String, String> result = new HashMap<>( configurator.getDatabaseTuningProperties() );
-        result.put( ServerInternalSettings.legacy_db_location.name(),
-                configurator.configuration().get( ServerInternalSettings.legacy_db_location ).getAbsolutePath() );
-
-        // make sure that the default in server for db_query_log_filename is "data/log/queries.log" instead of null
-        if ( dbConfig.get( GraphDatabaseSettings.log_queries_filename ) == null )
-        {
-            result.put( GraphDatabaseSettings.log_queries_filename.name(), "data/log/queries.log" );
-        }
-
-        putIfAbsent( result, ShellSettings.remote_shell_enabled.name(), Settings.TRUE );
-        result.putAll( configurator.configuration().getParams() );
-        return result;
-    }
-
-    private void putIfAbsent( Map<String, String> databaseProperties, String configKey, String configValue )
-    {
-        if ( databaseProperties.get( configKey ) == null )
-        {
-            databaseProperties.put( configKey, configValue );
         }
     }
 
@@ -285,8 +222,7 @@ public abstract class AbstractNeoServer implements NeoServer
     {
         return new DatabaseActions(
                 new LeaseManager( SYSTEM_CLOCK ),
-                configurator.configuration().get(
-                        ServerInternalSettings.script_sandboxing_enabled ), database.getGraph() );
+                config.get( ServerInternalSettings.script_sandboxing_enabled ), database.getGraph() );
     }
 
     private TransactionFacade createTransactionalActions()
@@ -325,26 +261,8 @@ public abstract class AbstractNeoServer implements NeoServer
      */
     private long getTransactionTimeoutMillis()
     {
-        final long timeout = configurator.configuration().get( ServerSettings.transaction_timeout );
+        final long timeout = config.get( ServerSettings.transaction_timeout );
         return Math.max( timeout, MINIMUM_TIMEOUT + ROUNDING_SECOND );
-    }
-
-    protected InterruptThreadTimer createInterruptStartupTimer()
-    {
-        long startupTimeout = configurator.configuration().get( ServerInternalSettings.startup_timeout );
-        InterruptThreadTimer stopStartupTimer;
-        if ( startupTimeout > 0 )
-        {
-            log.info( "Setting startup timeout to %dms", startupTimeout );
-            stopStartupTimer = InterruptThreadTimer.createTimer(
-                    startupTimeout,
-                    Thread.currentThread() );
-        }
-        else
-        {
-            stopStartupTimer = InterruptThreadTimer.createNoOpTimer();
-        }
-        return stopStartupTimer;
     }
 
     /**
@@ -383,24 +301,16 @@ public abstract class AbstractNeoServer implements NeoServer
                 .run();
     }
 
-    private void runPreflightTasks()
-    {
-        if ( !preFlight.run() )
-        {
-            throw new PreflightFailedException( preFlight.failedTask() );
-        }
-    }
-
     @Override
     public Config getConfig()
     {
-        return configurator.configuration();
+        return config;
     }
 
     @Override
     public Configuration getConfiguration()
     {
-        return new ConfigWrappingConfiguration( this.configurator.configuration() );
+        return new ConfigWrappingConfiguration( config );
     }
 
     // TODO: Once WebServer is fully implementing LifeCycle,
@@ -411,7 +321,7 @@ public abstract class AbstractNeoServer implements NeoServer
         int webServerPort = getWebServerPort();
         String webServerAddr = getWebServerAddress();
 
-        int maxThreads = getMaxThreads();
+        int maxThreads = config.get( ServerSettings.webserver_max_threads );
 
         int sslPort = getHttpsPort();
         boolean sslEnabled = getHttpsEnabled();
@@ -424,7 +334,7 @@ public abstract class AbstractNeoServer implements NeoServer
         webServer.setEnableHttps( sslEnabled );
         webServer.setHttpsPort( sslPort );
 
-        webServer.setWadlEnabled( configurator.configuration().get( ServerInternalSettings.wadl_enabled ) );
+        webServer.setWadlEnabled( config.get( ServerInternalSettings.wadl_enabled ) );
         webServer.setDefaultInjectables( createDefaultInjectables() );
 
         if ( sslEnabled )
@@ -432,19 +342,6 @@ public abstract class AbstractNeoServer implements NeoServer
             log.info( "Enabling HTTPS on port %s", sslPort );
             webServer.setHttpsCertificateInformation( keyStoreInfo );
         }
-    }
-
-    private int getMaxThreads()
-    {
-        return configurator.configuration().get( ServerSettings.webserver_max_threads ) != null ?
-               configurator.configuration().get( ServerSettings.webserver_max_threads ) :
-                defaultMaxWebServerThreads();
-    }
-
-    private int defaultMaxWebServerThreads()
-    {
-        return Math.min(Runtime.getRuntime()
-                .availableProcessors(),500);
     }
 
     private void startWebServer()
@@ -474,10 +371,8 @@ public abstract class AbstractNeoServer implements NeoServer
         {
             return;
         }
-        boolean contentLoggingEnabled = configurator.configuration().get( ServerSettings.http_logging_enabled );
 
-        File logFile = configurator.configuration().get( ServerSettings.http_log_config_File );
-        webServer.setHttpLoggingConfiguration( logFile, contentLoggingEnabled );
+        webServer.setHttpLoggingConfiguration(config.get( http_log_config_file ), config.get( http_logging_enabled ));
     }
 
     private void setUpTimeoutFilter()
@@ -506,48 +401,39 @@ public abstract class AbstractNeoServer implements NeoServer
 
     private boolean configLocated()
     {
-        final File logFile = getConfig().get( ServerSettings.http_log_config_File );
+        final File logFile = getConfig().get( http_log_config_file );
         return logFile != null && logFile.exists();
     }
 
     private boolean loggingEnabled()
     {
-        return getConfig().get( ServerSettings.http_logging_enabled );
+        return getConfig().get( http_logging_enabled );
     }
 
     protected int getWebServerPort()
     {
-        return configurator.configuration().get( ServerSettings.webserver_port );
+        return config.get( ServerSettings.webserver_port );
     }
 
     protected boolean getHttpsEnabled()
     {
-        return configurator.configuration().get( ServerSettings.webserver_https_enabled );
+        return config.get( ServerSettings.webserver_https_enabled );
     }
 
     protected int getHttpsPort()
     {
-        return configurator.configuration().get( ServerSettings.webserver_https_port );
+        return config.get( ServerSettings.webserver_https_port );
     }
 
     protected String getWebServerAddress()
     {
-        return configurator.configuration().get( ServerSettings.webserver_address );
+        return config.get( ServerSettings.webserver_address );
     }
 
-    // TODO: This is jetty-specific, move to Jetty9WebServer
-
-    /**
-     * Jetty wants certificates stored in a key store, which is nice, but
-     * to make it easier for non-java savvy users, we let them put
-     * their certificates directly on the file system (advising appropriate
-     * permissions etc), like you do with Apache Web Server. On each startup
-     * we set up a key store for them with their certificate in it.
-     */
-    protected KeyStoreInformation initHttpsKeyStore()
+    protected KeyStoreInformation createKeyStore()
     {
-        File privateKeyPath = configurator.configuration().get( ServerSettings.tls_key_file ).getAbsoluteFile();
-        File certificatePath = configurator.configuration().get( ServerSettings.tls_certificate_file ).getAbsoluteFile();
+        File privateKeyPath = config.get( ServerSettings.tls_key_file ).getAbsoluteFile();
+        File certificatePath = config.get( ServerSettings.tls_certificate_file ).getAbsoluteFile();
 
         try
         {
@@ -680,15 +566,9 @@ public abstract class AbstractNeoServer implements NeoServer
     }
 
     @Override
-    public ConfigurationBuilder getConfigurationBuilder()
-    {
-        return configurator;
-    }
-
-    @Override
     public Configurator getConfigurator()
     {
-        return new ConfigurationBuilder.ConfigurationBuilderWrappingConfigurator( getConfigurationBuilder() );
+        return new ConfigurationBuilder.ConfigWrappingConfigurator( config );
     }
 
     @Override

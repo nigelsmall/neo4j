@@ -45,7 +45,7 @@ import org.neo4j.collection.primitive.PrimitiveLongIterator;
 import org.neo4j.function.Function;
 import org.neo4j.function.Predicate;
 import org.neo4j.graphdb.Direction;
-import org.neo4j.kernel.api.constraints.UniquenessConstraint;
+import org.neo4j.kernel.api.constraints.PropertyConstraint;
 import org.neo4j.kernel.api.cursor.NodeCursor;
 import org.neo4j.kernel.api.cursor.RelationshipCursor;
 import org.neo4j.kernel.api.exceptions.EntityNotFoundException;
@@ -59,7 +59,6 @@ import org.neo4j.kernel.api.exceptions.schema.TooManyLabelsException;
 import org.neo4j.kernel.api.index.IndexDescriptor;
 import org.neo4j.kernel.api.index.InternalIndexState;
 import org.neo4j.kernel.api.properties.DefinedProperty;
-import org.neo4j.kernel.api.properties.Property;
 import org.neo4j.kernel.impl.api.DegreeVisitor;
 import org.neo4j.kernel.impl.api.KernelStatement;
 import org.neo4j.kernel.impl.api.RelationshipVisitor;
@@ -96,15 +95,10 @@ public class CacheLayer implements StoreReadLayer
 
     private final SchemaCache schemaCache;
     private final DiskLayer diskLayer;
-    private final IndexingService indexingService;
 
-    public CacheLayer(
-            DiskLayer diskLayer,
-            IndexingService indexingService,
-            SchemaCache schemaCache )
+    public CacheLayer( DiskLayer diskLayer, SchemaCache schemaCache )
     {
         this.diskLayer = diskLayer;
-        this.indexingService = indexingService;
         this.schemaCache = schemaCache;
     }
 
@@ -112,18 +106,6 @@ public class CacheLayer implements StoreReadLayer
     public StoreStatement acquireStatement()
     {
         return diskLayer.acquireStatement();
-    }
-
-    @Override
-    public boolean nodeExists( long nodeId )
-    {
-        return diskLayer.nodeExists( nodeId );
-    }
-
-    @Override
-    public boolean nodeHasLabel( StoreStatement statement, long nodeId, int labelId ) throws EntityNotFoundException
-    {
-        return diskLayer.nodeHasLabel( statement, nodeId, labelId );
     }
 
     @Override
@@ -213,56 +195,13 @@ public class CacheLayer implements StoreReadLayer
     }
 
     @Override
-    public PrimitiveIntIterator nodeGetPropertyKeys( StoreStatement statement,
-            long nodeId ) throws EntityNotFoundException
-    {
-        return diskLayer.nodeGetPropertyKeys( statement, nodeId );
-    }
-
-    @Override
-    public Property nodeGetProperty( StoreStatement statement,
-            long nodeId,
-            int propertyKeyId ) throws EntityNotFoundException
-    {
-        return diskLayer.nodeGetProperty( statement, nodeId, propertyKeyId );
-    }
-
-    @Override
-    public Iterator<DefinedProperty> nodeGetAllProperties( StoreStatement statement,
-            long nodeId ) throws EntityNotFoundException
-    {
-        return diskLayer.nodeGetAllProperties( statement, nodeId );
-    }
-
-    @Override
-    public PrimitiveIntIterator relationshipGetPropertyKeys( StoreStatement statement, long relationshipId )
-            throws EntityNotFoundException
-    {
-        return diskLayer.relationshipGetPropertyKeys( statement, relationshipId );
-    }
-
-    @Override
-    public Property relationshipGetProperty( StoreStatement statement, long relationshipId, int propertyKeyId )
-            throws EntityNotFoundException
-    {
-        return diskLayer.relationshipGetProperty( acquireStatement(), relationshipId, propertyKeyId );
-    }
-
-    @Override
-    public Iterator<DefinedProperty> relationshipGetAllProperties( StoreStatement statement, long relationshipId )
-            throws EntityNotFoundException
-    {
-        return diskLayer.relationshipGetAllProperties( statement, relationshipId );
-    }
-
-    @Override
     public PrimitiveIntIterator graphGetPropertyKeys( KernelStatement state )
     {
         return diskLayer.graphGetPropertyKeys( state );
     }
 
     @Override
-    public Property graphGetProperty( int propertyKeyId )
+    public Object graphGetProperty( int propertyKeyId )
     {
         return diskLayer.graphGetProperty( propertyKeyId );
     }
@@ -274,19 +213,19 @@ public class CacheLayer implements StoreReadLayer
     }
 
     @Override
-    public Iterator<UniquenessConstraint> constraintsGetForLabelAndPropertyKey( int labelId, int propertyKeyId )
+    public Iterator<PropertyConstraint> constraintsGetForLabelAndPropertyKey( int labelId, int propertyKeyId )
     {
         return schemaCache.constraintsForLabelAndProperty( labelId, propertyKeyId );
     }
 
     @Override
-    public Iterator<UniquenessConstraint> constraintsGetForLabel( int labelId )
+    public Iterator<PropertyConstraint> constraintsGetForLabel( int labelId )
     {
         return schemaCache.constraintsForLabel( labelId );
     }
 
     @Override
-    public Iterator<UniquenessConstraint> constraintsGetAll()
+    public Iterator<PropertyConstraint> constraintsGetAll()
     {
         return schemaCache.constraints();
     }
@@ -298,7 +237,7 @@ public class CacheLayer implements StoreReadLayer
             Object value )
             throws IndexNotFoundKernelException, IndexBrokenKernelException
     {
-        return diskLayer.nodeGetFromUniqueIndexSeek( state, schemaCache.indexId( index ), value );
+        return diskLayer.nodeGetFromUniqueIndexSeek( state, index, value );
     }
 
     @Override
@@ -308,28 +247,28 @@ public class CacheLayer implements StoreReadLayer
     }
 
     @Override
-    public PrimitiveLongResourceIterator nodesGetFromIndexSeek( KernelStatement state,
+    public PrimitiveLongIterator nodesGetFromIndexSeek( KernelStatement state,
             IndexDescriptor index,
             Object value )
             throws IndexNotFoundKernelException
     {
-        return diskLayer.nodesGetFromIndexSeek( state, schemaCache.indexId( index ), value );
+        return diskLayer.nodesGetFromIndexSeek( state, index, value );
     }
 
     @Override
-    public PrimitiveLongResourceIterator nodesGetFromIndexSeekByPrefix( KernelStatement state,
+    public PrimitiveLongIterator nodesGetFromIndexSeekByPrefix( KernelStatement state,
             IndexDescriptor index,
             String prefix )
             throws IndexNotFoundKernelException
     {
-        return diskLayer.nodesGetFromIndexSeekByPrefix( state, schemaCache.indexId( index ), prefix );
+        return diskLayer.nodesGetFromIndexSeekByPrefix( state, index, prefix );
     }
 
     @Override
-    public PrimitiveLongResourceIterator nodesGetFromIndexScan( KernelStatement state, IndexDescriptor index )
+    public PrimitiveLongIterator nodesGetFromIndexScan( KernelStatement state, IndexDescriptor index )
             throws IndexNotFoundKernelException
     {
-        return diskLayer.nodesGetFromIndexScan( state, schemaCache.indexId( index ) );
+        return diskLayer.nodesGetFromIndexScan( state, index );
     }
 
     @Override
@@ -342,19 +281,19 @@ public class CacheLayer implements StoreReadLayer
     public InternalIndexState indexGetState( IndexDescriptor descriptor )
             throws IndexNotFoundKernelException
     {
-        return indexingService.getIndexProxy( schemaCache.indexId( descriptor ) ).getState();
+        return diskLayer.indexGetState( descriptor );
     }
 
     @Override
     public long indexSize( IndexDescriptor descriptor ) throws IndexNotFoundKernelException
     {
-        return indexingService.indexSize( schemaCache.indexId( descriptor ) );
+        return diskLayer.indexSize( descriptor );
     }
 
     @Override
     public double indexUniqueValuesPercentage( IndexDescriptor descriptor ) throws IndexNotFoundKernelException
     {
-        return indexingService.indexUniqueValuesPercentage( schemaCache.indexId( descriptor ) );
+        return diskLayer.indexUniqueValuesPercentage( descriptor );
     }
 
     @Override
@@ -521,12 +460,6 @@ public class CacheLayer implements StoreReadLayer
     public RelationshipIterator relationshipsGetAll()
     {
         return diskLayer.relationshipsGetAll();
-    }
-
-    @Override
-    public boolean relationshipExists( long relationshipId )
-    {
-        return diskLayer.relationshipExists( relationshipId );
     }
 
     @Override

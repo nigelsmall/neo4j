@@ -37,6 +37,7 @@ import org.neo4j.function.Supplier
 import org.neo4j.graphdb.GraphDatabaseService
 import org.neo4j.helpers.Clock
 import org.neo4j.kernel.api.Statement
+import org.neo4j.kernel.impl.core.NodeManager
 
 import scala.collection.immutable
 
@@ -55,7 +56,7 @@ class CodeGenerator(val structure: CodeStructure[GeneratedQuery]) {
         val sourceSink: SourceSink = if(getBoolean("org.neo4j.cypher.internal.codegen.IncludeSourcesInPlanDescription")) Some(
           (className:String, sourceCode:String) => { sources = sources.updated(className, sourceCode) }) else None
 
-        val query: GeneratedQuery = generateQuery(plan, semanticTable, idMap, sourceSink)
+        val query: GeneratedQuery = generateQuery(plan, semanticTable, idMap, res.columns, sourceSink)
 
         val fp = planContext.statistics match {
           case igs: InstrumentedGraphStatistics =>
@@ -69,30 +70,29 @@ class CodeGenerator(val structure: CodeStructure[GeneratedQuery]) {
         }
 
         val builder = new RunnablePlan {
-          def apply(statement: Statement, db: GraphDatabaseService, execMode: ExecutionMode,
+          def apply(statement: Statement, nodeManager: NodeManager, execMode: ExecutionMode,
                     descriptionProvider: PlanDescriptionProvider,
                     params: immutable.Map[String, Any], closer: TaskCloser): InternalExecutionResult = {
             val (supplier, tracer) = descriptionProvider(description)
-            val execution: GeneratedQueryExecution = query.execute(closer, statement, db, execMode, supplier,
-              tracer.getOrElse(QueryExecutionTracer.NONE), asJavaHashMap(params))
+            val execution: GeneratedQueryExecution = query.execute(closer, statement, nodeManager, execMode,
+              supplier, tracer.getOrElse(QueryExecutionTracer.NONE), asJavaHashMap(params))
             new CompiledExecutionResult(closer, statement, execution, supplier)
           }
         }
 
-        val columns = res.nodes ++ res.relationships ++ res.other
-        CompiledPlan(updating = false, None, fp, plannerName, description, columns, builder)
+        CompiledPlan(updating = false, None, fp, plannerName, description, res.columns, builder)
 
       case _ => throw new CantCompileQueryException("Can only compile plans with ProduceResult on top")
     }
   }
 
-  private def generateQuery(plan: LogicalPlan, semantics: SemanticTable, ids: Map[LogicalPlan, Id], sources: SourceSink = None): GeneratedQuery = {
+  private def generateQuery(plan: LogicalPlan, semantics: SemanticTable, ids: Map[LogicalPlan, Id], columns: Seq[String], sources: SourceSink = None): GeneratedQuery = {
     import LogicalPlanConverter._
     implicit val context = new CodeGenContext(semantics, ids)
     val (_, instructions) = plan.asCodeGenPlan.produce(context)
     generateCode(structure)(instructions, context.operatorIds.map {
       case (id: Id, field: String) => field -> id
-    }.toMap, sources)
+    }.toMap, columns, sources)
   }
 
   private def asJavaHashMap(params: scala.collection.Map[String, Any]) = {
@@ -115,8 +115,7 @@ class CodeGenerator(val structure: CodeStructure[GeneratedQuery]) {
 object CodeGenerator {
   type SourceSink = Option[(String, String) => Unit]
 
-  def generateCode[T](structure: CodeStructure[T])(instructions: Seq[Instruction], operatorIds: Map[String, Id], sources:SourceSink=None)(implicit context: CodeGenContext): T = {
-    val columns = instructions.flatMap(_.allColumns)
+  def generateCode[T](structure: CodeStructure[T])(instructions: Seq[Instruction], operatorIds: Map[String, Id], columns: Seq[String], sources:SourceSink=None)(implicit context: CodeGenContext): T = {
     structure.generateQuery(packageName, Namer.newClassName(), columns, operatorIds, sources) { accept =>
       instructions.foreach(insn => insn.init(accept))
       instructions.foreach(insn => insn.body(accept))

@@ -30,12 +30,17 @@ import org.neo4j.collection.primitive.PrimitiveIntIterator;
 import org.neo4j.helpers.Clock;
 import org.neo4j.helpers.ThisShouldNotHappenError;
 import org.neo4j.kernel.api.KernelTransaction;
+import org.neo4j.kernel.api.KeyReadTokenNameLookup;
 import org.neo4j.kernel.api.Statement;
+import org.neo4j.kernel.api.constraints.MandatoryPropertyConstraint;
+import org.neo4j.kernel.api.constraints.PropertyConstraint;
 import org.neo4j.kernel.api.constraints.UniquenessConstraint;
+import org.neo4j.kernel.api.exceptions.ConstraintViolationTransactionFailureException;
 import org.neo4j.kernel.api.exceptions.EntityNotFoundException;
 import org.neo4j.kernel.api.exceptions.InvalidTransactionTypeKernelException;
 import org.neo4j.kernel.api.exceptions.Status;
 import org.neo4j.kernel.api.exceptions.TransactionFailureException;
+import org.neo4j.kernel.api.exceptions.schema.ConstraintValidationKernelException;
 import org.neo4j.kernel.api.exceptions.schema.DropIndexFailureException;
 import org.neo4j.kernel.api.exceptions.schema.SchemaRuleNotFoundException;
 import org.neo4j.kernel.api.index.IndexDescriptor;
@@ -55,9 +60,10 @@ import org.neo4j.kernel.impl.api.store.StoreStatement;
 import org.neo4j.kernel.impl.index.IndexEntityType;
 import org.neo4j.kernel.impl.locking.LockGroup;
 import org.neo4j.kernel.impl.locking.Locks;
+import org.neo4j.kernel.impl.store.MandatoryPropertyConstraintRule;
 import org.neo4j.kernel.impl.store.NeoStore;
 import org.neo4j.kernel.impl.store.SchemaStorage;
-import org.neo4j.kernel.impl.store.UniquenessConstraintRule;
+import org.neo4j.kernel.impl.store.UniquePropertyConstraintRule;
 import org.neo4j.kernel.impl.store.record.IndexRule;
 import org.neo4j.kernel.impl.transaction.TransactionHeaderInformationFactory;
 import org.neo4j.kernel.impl.transaction.TransactionMonitor;
@@ -216,6 +222,7 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
         this.startTimeMillis = clock.currentTimeMillis();
         this.lastTransactionIdWhenStarted = lastCommittedTx;
         this.transactionEvent = tracer.beginTransaction();
+        this.storeStatement = storeLayer.acquireStatement();
         assert transactionEvent != null : "transactionEvent was null!";
         return this;
     }
@@ -261,11 +268,6 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
         assertTransactionOpen();
         if ( currentStatement == null )
         {
-            if (storeStatement == null)
-            {
-                storeStatement = storeLayer.acquireStatement();
-            }
-
             currentStatement = new KernelStatement( this, new IndexReaderFactory.Caching( indexService ),
                     labelScanStore, this, locks, operations, storeStatement );
         }
@@ -365,13 +367,28 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
         }
     }
 
-    private void prepareRecordChangesFromTransactionState()
+    private void prepareRecordChangesFromTransactionState() throws ConstraintValidationKernelException
     {
         if ( hasTxStateWithChanges() )
         {
-            txState().accept( txStateToRecordStateVisitor );
+            txState().accept( txStateVisitor() );
             txStateToRecordStateVisitor.done();
         }
+    }
+
+    private TxStateVisitor txStateVisitor()
+    {
+        Iterator<PropertyConstraint> constraints = storeLayer.constraintsGetAll();
+        while ( constraints.hasNext() )
+        {
+            PropertyConstraint constraint = constraints.next();
+            if ( constraint instanceof MandatoryPropertyConstraint )
+            {
+                return new MandatoryPropertyEnforcer( operations.entityReadOperations(), txStateToRecordStateVisitor,
+                        this, storeLayer, storeStatement );
+            }
+        }
+        return txStateToRecordStateVisitor;
     }
 
     private void assertTransactionOpen()
@@ -454,6 +471,12 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
         this.hooksState = null;
         this.txState = null;
         this.legacyIndexTransactionState = null;
+
+        if ( storeStatement != null )
+        {
+            this.storeStatement.close();
+            this.storeStatement = null;
+        }
     }
 
     private void commit() throws TransactionFailureException
@@ -509,6 +532,11 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
             }
             success = true;
         }
+        catch ( ConstraintValidationKernelException e )
+        {
+            throw new ConstraintViolationTransactionFailureException(
+                    e.getUserMessage( new KeyReadTokenNameLookup( operations.keyReadOperations() ) ), e );
+        }
         finally
         {
             if ( !success )
@@ -539,20 +567,28 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
             // Free any acquired id's
             if ( txState != null )
             {
-                txState.accept( new TxStateVisitor.Adapter()
+                try
                 {
-                    @Override
-                    public void visitCreatedNode( long id )
+                    txState.accept( new TxStateVisitor.Adapter()
                     {
-                        storeLayer.releaseNode( id );
-                    }
+                        @Override
+                        public void visitCreatedNode( long id )
+                        {
+                            storeLayer.releaseNode( id );
+                        }
 
-                    @Override
-                    public void visitCreatedRelationship( long id, int type, long startNode, long endNode )
-                    {
-                        storeLayer.releaseRelationship( id );
-                    }
-                } );
+                        @Override
+                        public void visitCreatedRelationship( long id, int type, long startNode, long endNode )
+                        {
+                            storeLayer.releaseRelationship( id );
+                        }
+                    } );
+                }
+                catch ( ConstraintValidationKernelException e )
+                {
+                    throw new IllegalStateException(
+                            "Releasing locks during rollback should perform no constraints checking.", e );
+                }
             }
         }
         finally
@@ -594,7 +630,7 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
     {
         locks.releaseAll();
         pool.release( this );
-        if (storeStatement != null)
+        if ( storeStatement != null )
         {
             storeStatement.close();
             storeStatement = null;
@@ -834,7 +870,7 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
         }
 
         @Override
-        public void visitAddedConstraint( UniquenessConstraint element )
+        public void visitAddedUniquePropertyConstraint( UniquenessConstraint element )
         {
             clearState = true;
             long constraintId = schemaStorage.newRuleId();
@@ -842,18 +878,18 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
                     element.label(),
                     element.propertyKeyId(),
                     SchemaStorage.IndexRuleKind.CONSTRAINT );
-            recordState.createSchemaRule( UniquenessConstraintRule.uniquenessConstraintRule(
+            recordState.createSchemaRule( UniquePropertyConstraintRule.uniquenessConstraintRule(
                     constraintId, element.label(), element.propertyKeyId(), indexRule.getId() ) );
             recordState.setConstraintIndexOwner( indexRule, constraintId );
         }
 
         @Override
-        public void visitRemovedConstraint( UniquenessConstraint element )
+        public void visitRemovedUniquePropertyConstraint( UniquenessConstraint element )
         {
             try
             {
                 clearState = true;
-                UniquenessConstraintRule rule = schemaStorage
+                UniquePropertyConstraintRule rule = schemaStorage
                         .uniquenessConstraint( element.label(), element.propertyKeyId() );
                 recordState.dropSchemaRule( rule );
             }
@@ -866,6 +902,32 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
             }
             // Remove the index for the constraint as well
             visitRemovedIndex( new IndexDescriptor( element.label(), element.propertyKeyId() ), true );
+        }
+
+        @Override
+        public void visitAddedMandatoryPropertyConstraint( MandatoryPropertyConstraint element )
+        {
+            clearState = true;
+            recordState.createSchemaRule( MandatoryPropertyConstraintRule.mandatoryPropertyConstraintRule(
+                    schemaStorage.newRuleId(), element.label(), element.propertyKeyId() ) );
+        }
+
+        @Override
+        public void visitRemovedMandatoryPropertyConstraint( MandatoryPropertyConstraint element )
+        {
+            try
+            {
+                clearState = true;
+                recordState.dropSchemaRule(
+                        schemaStorage.mandatoryPropertyConstraint( element.label(), element.propertyKeyId() ) );
+            }
+            catch ( SchemaRuleNotFoundException e )
+            {
+                throw new ThisShouldNotHappenError(
+                        "Tobias Lindaaker",
+                        "Constraint to be removed should exist, since its existence should " +
+                                "have been validated earlier and the schema should have been locked." );
+            }
         }
 
         @Override
@@ -923,12 +985,16 @@ public class KernelTransactionImplementation implements KernelTransaction, TxSta
         }
     }
 
-    private PrimitiveIntIterator labelsOf( long nodeId ) throws EntityNotFoundException
+    private PrimitiveIntIterator labelsOf( long nodeId )
     {
         try ( StoreStatement statement = storeLayer.acquireStatement() )
         {
             return StateHandlingStatementOperations.nodeGetLabels( storeLayer, statement,
                     txState, nodeId );
+        }
+        catch ( EntityNotFoundException ex )
+        {
+            return PrimitiveIntCollections.emptyIterator();
         }
     }
 }

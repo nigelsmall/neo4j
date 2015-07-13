@@ -471,7 +471,7 @@ public class NeoStoreDataSource implements NeoStoreSupplier, Lifecycle, IndexPro
                     tokenNameLookup, logProvider, indexingServiceMonitor,
                     neoStoreModule.neoStore(), cacheModule.updateableSchemaState() );
 
-            StoreLayerModule storeLayerModule = buildStoreLayer( config, neoStoreModule.neoStore(),
+            StoreLayerModule storeLayerModule = buildStoreLayer( neoStoreModule.neoStore(),
                     propertyKeyTokenHolder, labelTokens, relationshipTypeTokens,
                     indexingModule.indexingService(), cacheModule.schemaCache() );
 
@@ -555,9 +555,10 @@ public class NeoStoreDataSource implements NeoStoreSupplier, Lifecycle, IndexPro
     // of the dependency tree, starting at the bottom
     private void upgradeStore( File storeDir, StoreUpgrader storeMigrationProcess, SchemaIndexProvider indexProvider )
     {
-        UpgradableDatabase upgradableDatabase = new UpgradableDatabase( new StoreVersionCheck( fs ) );
-        storeMigrationProcess.addParticipant( indexProvider.storeMigrationParticipant( fs, upgradableDatabase ) );
-        storeMigrationProcess.migrateIfNeeded( storeDir, indexProvider, pageCache );
+        UpgradableDatabase upgradableDatabase = new UpgradableDatabase( new StoreVersionCheck( pageCache ) );
+        storeMigrationProcess
+                .addParticipant( indexProvider.storeMigrationParticipant( fs, pageCache, upgradableDatabase ) );
+        storeMigrationProcess.migrateIfNeeded( storeDir, indexProvider );
     }
 
     private NeoStoreModule buildNeoStore( final StoreFactory storeFactory, final LabelTokenHolder
@@ -703,25 +704,16 @@ public class NeoStoreDataSource implements NeoStoreSupplier, Lifecycle, IndexPro
         };
     }
 
-    private StoreLayerModule buildStoreLayer( Config config, final NeoStore neoStore,
+    private StoreLayerModule buildStoreLayer( NeoStore neoStore,
             PropertyKeyTokenHolder propertyKeyTokenHolder, LabelTokenHolder labelTokens,
             RelationshipTypeTokenHolder relationshipTypeTokens,
             IndexingService indexingService,
             SchemaCache schemaCache )
     {
-        Supplier<NeoStore> neoStoreSupplier = new Supplier<NeoStore>()
-        {
-            @Override
-            public NeoStore get()
-            {
-                return neoStoreModule.neoStore();
-            }
-        };
-
-        final StoreReadLayer storeLayer;
-        storeLayer = new CacheLayer( new DiskLayer( propertyKeyTokenHolder, labelTokens, relationshipTypeTokens,
-                new SchemaStorage( neoStore.getSchemaStore() ), neoStoreSupplier, indexingService ),
-                indexingService, schemaCache );
+        SchemaStorage schemaStorage = new SchemaStorage( neoStore.getSchemaStore() );
+        DiskLayer diskLayer = new DiskLayer( propertyKeyTokenHolder, labelTokens, relationshipTypeTokens, schemaStorage,
+                neoStore, indexingService );
+        final StoreReadLayer storeLayer = new CacheLayer( diskLayer, schemaCache );
 
         return new StoreLayerModule()
         {
@@ -1093,42 +1085,35 @@ public class NeoStoreDataSource implements NeoStoreSupplier, Lifecycle, IndexPro
         LogFile logFile = transactionLogModule.logFile();
         synchronized ( logFile )
         {
-            // The synchronization in TransactionAppender is intricate. Some incarnations lock logFile,
-            // others logFile+writer or logFile THEN writer. In any case if both are locked by a single call
-            // stack it's always in the order of logFile THAN writer. Let's do that here as well to be as
-            // safe as we can be.
-            synchronized ( logFile.getWriter() )
+            // Under the guard of the logFile monitor do a second pass of waiting committing transactions
+            // to close. This is because there might have been transactions that were in flight and just now
+            // want to commit. We will allow committed transactions be properly closed, but no new transactions
+            // will be able to start committing at this point.
+            awaitAllTransactionsClosed();
+
+            // Force all pending store changes to disk.
+            storeFlusher.forceEverything();
+
+            //Write new checkpoint in the log only if the kernel is healthy.
+            // We cannot throw here since we need to shutdown without exceptions.
+            if ( kernelHealth.isHealthy() )
             {
-                // Under the guard of the logFile monitor do a second pass of waiting committing transactions
-                // to close. This is because there might have been transactions that were in flight and just now
-                // want to commit. We will allow committed transactions be properly closed, but no new transactions
-                // will be able to start committing at this point.
-                awaitAllTransactionsClosed();
-
-                // Force all pending store changes to disk.
-                storeFlusher.forceEverything();
-
-                //Write new checkpoint in the log only if the kernel is healthy.
-                // We cannot throw here since we need to shutdown without exceptions.
-                if ( kernelHealth.isHealthy() )
+                try
                 {
-                    try
-                    {
-                        checkPointer.forceCheckPoint();
-                    }
-                    catch ( IOException e )
-                    {
-                        throw new UnderlyingStorageException( e );
-                    }
+                    checkPointer.forceCheckPoint();
                 }
-
-                // Shut down all services in here, effectively making the database unusable for anyone who tries.
-                life.shutdown();
-
-                // Close the NeoStore
-                neoStoreModule.neoStore().close();
-                msgLog.info( "NeoStore closed" );
+                catch ( IOException e )
+                {
+                    throw new UnderlyingStorageException( e );
+                }
             }
+
+            // Shut down all services in here, effectively making the database unusable for anyone who tries.
+            life.shutdown();
+
+            // Close the NeoStore
+            neoStoreModule.neoStore().close();
+            msgLog.info( "NeoStore closed" );
         }
         // After we've released the logFile monitor there might be transactions that wants to commit, but had
         // to wait for the logFile monitor until now. When they finally get it and try to commit they will
@@ -1228,12 +1213,12 @@ public class NeoStoreDataSource implements NeoStoreSupplier, Lifecycle, IndexPro
                 stateHandlingContext );
         // + Constraints
         ConstraintEnforcingEntityOperations constraintEnforcingEntityOperations =
-                new ConstraintEnforcingEntityOperations(
-                        parts.entityWriteOperations(), parts.entityReadOperations(), parts.schemaReadOperations() );
+                new ConstraintEnforcingEntityOperations( parts.entityWriteOperations(), parts.entityReadOperations(),
+                        parts.schemaWriteOperations(), parts.schemaReadOperations() );
         // + Data integrity
         DataIntegrityValidatingStatementOperations dataIntegrityContext =
                 new DataIntegrityValidatingStatementOperations(
-                        parts.keyWriteOperations(), parts.schemaReadOperations(), parts.schemaWriteOperations() );
+                        parts.keyWriteOperations(), parts.schemaReadOperations(), constraintEnforcingEntityOperations );
         parts = parts.override( null, dataIntegrityContext, constraintEnforcingEntityOperations,
                 constraintEnforcingEntityOperations, null, dataIntegrityContext, null, null, null, null, null );
         // + Locking

@@ -32,6 +32,8 @@ import org.neo4j.kernel.api.LegacyIndexHits;
 import org.neo4j.kernel.api.ReadOperations;
 import org.neo4j.kernel.api.SchemaWriteOperations;
 import org.neo4j.kernel.api.StatementConstants;
+import org.neo4j.kernel.api.constraints.MandatoryPropertyConstraint;
+import org.neo4j.kernel.api.constraints.PropertyConstraint;
 import org.neo4j.kernel.api.constraints.UniquenessConstraint;
 import org.neo4j.kernel.api.cursor.NodeCursor;
 import org.neo4j.kernel.api.cursor.RelationshipCursor;
@@ -220,16 +222,27 @@ public class OperationsFacade implements ReadOperations, DataWriteOperations, Sc
     public PrimitiveIntIterator nodeGetLabels( long nodeId ) throws EntityNotFoundException
     {
         statement.assertOpen();
-        return dataRead().nodeGetLabels( statement, nodeId );
+        return dataRead().nodeGetLabels( statement, statement.getStoreStatement(), nodeId );
     }
 
     @Override
-    public Property nodeGetProperty( long nodeId, int propertyKeyId ) throws EntityNotFoundException
+    public boolean nodeHasProperty( long nodeId, int propertyKeyId ) throws EntityNotFoundException
     {
         statement.assertOpen();
         if ( propertyKeyId == StatementConstants.NO_SUCH_PROPERTY_KEY )
         {
-            return Property.noNodeProperty( nodeId, propertyKeyId );
+            return false;
+        }
+        return dataRead().nodeHasProperty( statement, nodeId, propertyKeyId );
+    }
+
+    @Override
+    public Object nodeGetProperty( long nodeId, int propertyKeyId ) throws EntityNotFoundException
+    {
+        statement.assertOpen();
+        if ( propertyKeyId == StatementConstants.NO_SUCH_PROPERTY_KEY )
+        {
+            return null;
         }
         return dataRead().nodeGetProperty( statement, nodeId, propertyKeyId );
     }
@@ -272,61 +285,68 @@ public class OperationsFacade implements ReadOperations, DataWriteOperations, Sc
     }
 
     @Override
-    public Property relationshipGetProperty( long relationshipId, int propertyKeyId ) throws EntityNotFoundException
+    public boolean relationshipHasProperty( long relationshipId, int propertyKeyId ) throws EntityNotFoundException
     {
         statement.assertOpen();
         if ( propertyKeyId == StatementConstants.NO_SUCH_PROPERTY_KEY )
         {
-            return Property.noRelationshipProperty( relationshipId, propertyKeyId );
+            return false;
+        }
+        return dataRead().relationshipHasProperty( statement, relationshipId, propertyKeyId );
+    }
+
+    @Override
+    public Object relationshipGetProperty( long relationshipId, int propertyKeyId ) throws EntityNotFoundException
+    {
+        statement.assertOpen();
+        if ( propertyKeyId == StatementConstants.NO_SUCH_PROPERTY_KEY )
+        {
+            return null;
         }
         return dataRead().relationshipGetProperty( statement, relationshipId, propertyKeyId );
     }
 
     @Override
-    public Property graphGetProperty( int propertyKeyId )
+    public boolean graphHasProperty( int propertyKeyId )
     {
         statement.assertOpen();
         if ( propertyKeyId == StatementConstants.NO_SUCH_PROPERTY_KEY )
         {
-            return Property.noGraphProperty( propertyKeyId );
+            return false;
+        }
+        return dataRead().graphHasProperty( statement, propertyKeyId );
+    }
+
+    @Override
+    public Object graphGetProperty( int propertyKeyId )
+    {
+        statement.assertOpen();
+        if ( propertyKeyId == StatementConstants.NO_SUCH_PROPERTY_KEY )
+        {
+            return null;
         }
         return dataRead().graphGetProperty( statement, propertyKeyId );
     }
 
     @Override
-    public PrimitiveIntIterator nodeGetAllPropertiesKeys( long nodeId ) throws EntityNotFoundException
+    public PrimitiveIntIterator nodeGetPropertyKeys( long nodeId ) throws EntityNotFoundException
     {
         statement.assertOpen();
         return dataRead().nodeGetPropertyKeys( statement, nodeId );
     }
 
     @Override
-    public Iterator<DefinedProperty> nodeGetAllProperties( long nodeId ) throws EntityNotFoundException
-    {
-        statement.assertOpen();
-        return dataRead().nodeGetAllProperties( statement, nodeId );
-    }
-
-    @Override
-    public PrimitiveIntIterator relationshipGetAllPropertiesKeys( long nodeId ) throws EntityNotFoundException
+    public PrimitiveIntIterator relationshipGetPropertyKeys( long nodeId ) throws EntityNotFoundException
     {
         statement.assertOpen();
         return dataRead().relationshipGetPropertyKeys( statement, nodeId );
     }
 
     @Override
-    public Iterator<DefinedProperty> relationshipGetAllProperties( long relationshipId )
-            throws EntityNotFoundException
+    public PrimitiveIntIterator graphGetPropertyKeys()
     {
         statement.assertOpen();
-        return dataRead().relationshipGetAllProperties( statement, relationshipId );
-    }
-
-    @Override
-    public Iterator<DefinedProperty> graphGetAllProperties()
-    {
-        statement.assertOpen();
-        return dataRead().graphGetAllProperties( statement );
+        return dataRead().graphGetPropertyKeys( statement );
     }
 
     @Override
@@ -344,25 +364,25 @@ public class OperationsFacade implements ReadOperations, DataWriteOperations, Sc
     public NodeCursor nodeCursor( long nodeId )
     {
         statement.assertOpen();
-        return dataRead().nodeCursor(statement, nodeId);
+        return dataRead().nodeCursor( statement, nodeId );
     }
 
     @Override
     public RelationshipCursor relationshipCursor( long relId )
     {
         statement.assertOpen();
-        return dataRead().relationshipCursor(statement, relId);
+        return dataRead().relationshipCursor( statement, relId );
     }
 
     @Override
-    public NodeCursor nodeCursorGetAll( )
+    public NodeCursor nodeCursorGetAll()
     {
         statement.assertOpen();
-        return dataRead().nodeCursorGetAll(statement);
+        return dataRead().nodeCursorGetAll( statement );
     }
 
     @Override
-    public RelationshipCursor relationshipCursorGetAll(  )
+    public RelationshipCursor relationshipCursorGetAll()
     {
         statement.assertOpen();
         return dataRead().relationshipCursorGetAll( statement );
@@ -376,7 +396,7 @@ public class OperationsFacade implements ReadOperations, DataWriteOperations, Sc
     }
 
     @Override
-    public NodeCursor nodeCursorGetFromIndexSeek(  IndexDescriptor index,
+    public NodeCursor nodeCursorGetFromIndexSeek( IndexDescriptor index,
             Object value ) throws IndexNotFoundKernelException
     {
         statement.assertOpen();
@@ -518,21 +538,21 @@ public class OperationsFacade implements ReadOperations, DataWriteOperations, Sc
     }
 
     @Override
-    public Iterator<UniquenessConstraint> constraintsGetForLabelAndPropertyKey( int labelId, int propertyKeyId )
+    public Iterator<PropertyConstraint> constraintsGetForLabelAndPropertyKey( int labelId, int propertyKeyId )
     {
         statement.assertOpen();
         return schemaRead().constraintsGetForLabelAndPropertyKey( statement, labelId, propertyKeyId );
     }
 
     @Override
-    public Iterator<UniquenessConstraint> constraintsGetForLabel( int labelId )
+    public Iterator<PropertyConstraint> constraintsGetForLabel( int labelId )
     {
         statement.assertOpen();
         return schemaRead().constraintsGetForLabel( statement, labelId );
     }
 
     @Override
-    public Iterator<UniquenessConstraint> constraintsGetAll()
+    public Iterator<PropertyConstraint> constraintsGetAll()
     {
         statement.assertOpen();
         return schemaRead().constraintsGetAll( statement );
@@ -772,15 +792,23 @@ public class OperationsFacade implements ReadOperations, DataWriteOperations, Sc
     }
 
     @Override
-    public UniquenessConstraint uniquenessConstraintCreate( int labelId, int propertyKeyId )
+    public UniquenessConstraint uniquePropertyConstraintCreate( int labelId, int propertyKeyId )
             throws CreateConstraintFailureException, AlreadyConstrainedException, AlreadyIndexedException
     {
         statement.assertOpen();
-        return schemaWrite().uniquenessConstraintCreate( statement, labelId, propertyKeyId );
+        return schemaWrite().uniquePropertyConstraintCreate( statement, labelId, propertyKeyId );
     }
 
     @Override
-    public void constraintDrop( UniquenessConstraint constraint ) throws DropConstraintFailureException
+    public MandatoryPropertyConstraint mandatoryPropertyConstraintCreate( int labelId, int propertyKeyId )
+            throws CreateConstraintFailureException, AlreadyConstrainedException
+    {
+        statement.assertOpen();
+        return schemaWrite().mandatoryPropertyConstraintCreate( statement, labelId, propertyKeyId );
+    }
+
+    @Override
+    public void constraintDrop( PropertyConstraint constraint ) throws DropConstraintFailureException
     {
         statement.assertOpen();
         schemaWrite().constraintDrop( statement, constraint );

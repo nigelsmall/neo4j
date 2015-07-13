@@ -59,7 +59,7 @@ public class QueryInvalidationIT
         // - execute the query without the existence data -
         distantFriend( random, USERS );
 
-        long replanTime = System.currentTimeMillis() + 1_100;
+        long replanTime = System.currentTimeMillis() + 1_800;
 
         // - create data -
         createData( 0, USERS, CONNECTIONS, random );
@@ -76,7 +76,7 @@ public class QueryInvalidationIT
         distantFriend( random, USERS );
 
         // THEN
-        assertEquals( "Query should have been replanned.", 1, monitor.discards );
+        assertEquals( "Query should have been replanned.", 1, monitor.discards.get() );
     }
 
     @Test
@@ -93,7 +93,7 @@ public class QueryInvalidationIT
         createData( 0, USERS, CONNECTIONS, random );
         distantFriend( random, USERS );
 
-        long replanTime = System.currentTimeMillis() + 1_100;
+        long replanTime = System.currentTimeMillis() + 1_800;
 
         //create more date
         createData( USERS, USERS, CONNECTIONS, random );

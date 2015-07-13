@@ -26,13 +26,19 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import org.neo4j.graphdb.factory.GraphDatabaseSettings;
 import org.neo4j.helpers.Settings;
 import org.neo4j.kernel.configuration.Config;
+import org.neo4j.server.web.ServerInternalSettings;
+
+import static java.util.Arrays.asList;
 
 /**
- *  Used by the server to load server and database properties.
- *
+ * Used by the server to load server and database properties.
+ * @deprecated this is no longer supported, public programmatic access to Neo4j Server is deprecated, internal
+ *             config should use {@link Config}. This will be removed in the next major version of Neo4j.
  */
+@Deprecated
 public interface ConfigurationBuilder
 {
     /**
@@ -68,8 +74,8 @@ public interface ConfigurationBuilder
             }
             serverProperties.put( ServerSettings.third_party_packages.name(),
                     toStringForThirdPartyPackageProperty( configurator.getThirdpartyJaxRsPackages() ) );
-            this.serverConfig = new Config( serverProperties );
 
+            this.serverConfig = new Config( serverProperties, ServerConfigFactory.getDefaultSettingsClasses() );
             // use the db properties directly
             this.dbProperties = configurator.getDatabaseTuningProperties();
         }
@@ -108,32 +114,31 @@ public interface ConfigurationBuilder
         }
     }
 
-    class ConfigurationBuilderWrappingConfigurator extends Configurator.Adapter
+    class ConfigWrappingConfigurator extends Configurator.Adapter
     {
+        private Config config;
 
-        private final ConfigurationBuilder builder;
-
-        public ConfigurationBuilderWrappingConfigurator( ConfigurationBuilder builder )
+        public ConfigWrappingConfigurator( Config config )
         {
-            this.builder = builder;
+            this.config = config;
         }
 
         @Override
         public Configuration configuration()
         {
-            return new ConfigWrappingConfiguration( builder.configuration() );
+            return new ConfigWrappingConfiguration( config );
         }
 
         @Override
         public Map<String,String> getDatabaseTuningProperties()
         {
-            return builder.getDatabaseTuningProperties();
+            return config.getParams();
         }
 
         @Override
         public List<ThirdPartyJaxRsPackage> getThirdpartyJaxRsPackages()
         {
-            return builder.configuration().get( ServerSettings.third_party_packages );
+            return config.get( ServerSettings.third_party_packages );
         }
 
     }

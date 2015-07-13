@@ -27,6 +27,8 @@ import org.junit.rules.TestRule;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
 
+import java.io.IOException;
+
 import org.neo4j.collection.primitive.PrimitiveLongObjectMap;
 import org.neo4j.function.Function;
 import org.neo4j.graphdb.GraphDatabaseService;
@@ -37,6 +39,7 @@ import org.neo4j.kernel.impl.util.JobScheduler;
 import org.neo4j.kernel.lifecycle.LifeSupport;
 import org.neo4j.ndp.runtime.Sessions;
 import org.neo4j.ndp.runtime.internal.StandardSessions;
+import org.neo4j.ndp.runtime.internal.concurrent.ThreadedSessions;
 import org.neo4j.ndp.transport.socket.NettyServer;
 import org.neo4j.ndp.transport.socket.SocketProtocol;
 import org.neo4j.ndp.transport.socket.SocketProtocolV1;

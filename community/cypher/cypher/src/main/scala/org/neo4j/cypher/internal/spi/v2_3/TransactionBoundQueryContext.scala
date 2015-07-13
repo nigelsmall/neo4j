@@ -30,10 +30,9 @@ import org.neo4j.cypher.internal.compiler.v2_3.{EntityNotFoundException, FailedI
 import org.neo4j.graphdb.DynamicRelationshipType._
 import org.neo4j.graphdb._
 import org.neo4j.graphdb.factory.GraphDatabaseSettings
-import org.neo4j.helpers.collection.IteratorUtil
 import org.neo4j.kernel.GraphDatabaseAPI
 import org.neo4j.kernel.api._
-import org.neo4j.kernel.api.constraints.UniquenessConstraint
+import org.neo4j.kernel.api.constraints.{MandatoryPropertyConstraint, UniquenessConstraint}
 import org.neo4j.kernel.api.exceptions.schema.{AlreadyConstrainedException, AlreadyIndexedException}
 import org.neo4j.kernel.api.index.{IndexDescriptor, InternalIndexState}
 import org.neo4j.kernel.configuration.Config
@@ -115,10 +114,10 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     JavaConversionSupport.asScala(statement.readOperations().nodeGetLabels(node))
 
   def getPropertiesForNode(node: Long) =
-    JavaConversionSupport.asScala(statement.readOperations().nodeGetAllPropertiesKeys(node))
+    JavaConversionSupport.asScala(statement.readOperations().nodeGetPropertyKeys(node))
 
   def getPropertiesForRelationship(relId: Long) =
-    JavaConversionSupport.asScala(statement.readOperations().relationshipGetAllPropertiesKeys(relId))
+    JavaConversionSupport.asScala(statement.readOperations().relationshipGetPropertyKeys(relId))
 
   override def isLabelSetOnNode(label: Int, node: Long) =
     statement.readOperations().nodeHasLabel(node, label)
@@ -137,7 +136,7 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
   def indexSeekByRange(index: IndexDescriptor, value: Any) = value match {
     case StringSeekRange(LowerBounded(InclusiveBound(prefix))) =>
       val indexedNodes = statement.readOperations().nodesGetFromIndexSeekByPrefix(index, prefix)
-      JavaConversionSupport.mapToScala(indexedNodes)(nodeOps.getById)
+      JavaConversionSupport.mapToScalaENFXSafe(indexedNodes)(nodeOps.getById)
     case range =>
       throw new InternalException(s"Unsupported index seek by range: $range")
   }
@@ -156,7 +155,7 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
   }
 
   def getNodesByLabel(id: Int): Iterator[Node] =
-    JavaConversionSupport.mapToScala(statement.readOperations().nodesGetForLabel(id))(nodeOps.getById)
+    JavaConversionSupport.mapToScalaENFXSafe(statement.readOperations().nodesGetForLabel(id))(nodeOps.getById)
 
   def nodeGetDegree(node: Long, dir: Direction): Int = statement.readOperations().nodeGetDegree(node, dir)
 
@@ -174,16 +173,16 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     }
 
     def propertyKeyIds(id: Long): Iterator[Int] =
-      JavaConversionSupport.asScala(statement.readOperations().nodeGetAllPropertiesKeys(id))
+      JavaConversionSupport.asScala(statement.readOperations().nodeGetPropertyKeys(id))
 
     def getProperty(id: Long, propertyKeyId: Int): Any = try {
-      statement.readOperations().nodeGetProperty(id, propertyKeyId).value(null)
+      statement.readOperations().nodeGetProperty(id, propertyKeyId)
     } catch {
       case _: org.neo4j.kernel.api.exceptions.EntityNotFoundException => null
     }
 
     def hasProperty(id: Long, propertyKey: Int) =
-      statement.readOperations().nodeGetProperty(id, propertyKey).isDefined
+      statement.readOperations().nodeHasProperty(id, propertyKey)
 
     def removeProperty(id: Long, propertyKeyId: Int) {
       statement.dataWriteOperations().nodeRemoveProperty(id, propertyKeyId)
@@ -217,13 +216,13 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     }
 
     def propertyKeyIds(id: Long): Iterator[Int] =
-      statement.readOperations().relationshipGetAllProperties(id).asScala.map(_.propertyKeyId())
+      asScala(statement.readOperations().relationshipGetPropertyKeys(id))
 
     def getProperty(id: Long, propertyKeyId: Int): Any =
-      statement.readOperations().relationshipGetProperty(id, propertyKeyId).value(null)
+      statement.readOperations().relationshipGetProperty(id, propertyKeyId)
 
     def hasProperty(id: Long, propertyKey: Int) =
-      statement.readOperations().relationshipGetProperty(id, propertyKey).isDefined
+      statement.readOperations().relationshipHasProperty(id, propertyKey)
 
     def removeProperty(id: Long, propertyKeyId: Int) {
       statement.dataWriteOperations().relationshipRemoveProperty(id, propertyKeyId)
@@ -297,22 +296,31 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     statement.schemaWriteOperations().indexDrop(new IndexDescriptor(labelId, propertyKeyId))
 
   def createUniqueConstraint(labelId: Int, propertyKeyId: Int): IdempotentResult[UniquenessConstraint] = try {
-    IdempotentResult(statement.schemaWriteOperations().uniquenessConstraintCreate(labelId, propertyKeyId))
+    IdempotentResult(statement.schemaWriteOperations().uniquePropertyConstraintCreate(labelId, propertyKeyId))
   } catch {
-    case _: AlreadyConstrainedException =>
-      val readOperations: ReadOperations = statement.readOperations()
-      val uniquenessConstraints = readOperations.constraintsGetForLabelAndPropertyKey(labelId, propertyKeyId)
-      IdempotentResult(IteratorUtil.single(uniquenessConstraints), wasCreated = false)
+    case existing: AlreadyConstrainedException =>
+      IdempotentResult(existing.constraint().asInstanceOf[UniquenessConstraint], wasCreated = false)
   }
 
   def dropUniqueConstraint(labelId: Int, propertyKeyId: Int) =
     statement.schemaWriteOperations().constraintDrop(new UniquenessConstraint(labelId, propertyKeyId))
 
-  //TODO implement
-  def createMandatoryConstraint(labelId: Int, propertyKeyId: Int): IdempotentResult[UniquenessConstraint] = ???
+  def createNodeMandatoryConstraint(labelId: Int, propertyKeyId: Int): IdempotentResult[MandatoryPropertyConstraint] =
+    try {
+      IdempotentResult(statement.schemaWriteOperations().mandatoryPropertyConstraintCreate(labelId, propertyKeyId))
+    } catch {
+      case existing: AlreadyConstrainedException =>
+        IdempotentResult(existing.constraint().asInstanceOf[MandatoryPropertyConstraint], wasCreated = false)
+    }
+
+  def dropNodeMandatoryConstraint(labelId: Int, propertyKeyId: Int) =
+    statement.schemaWriteOperations().constraintDrop(new MandatoryPropertyConstraint(labelId, propertyKeyId))
 
   //TODO implement
-  def dropMandatoryConstraint(labelId: Int, propertyKeyId: Int) = ???
+  def createRelationshipMandatoryConstraint(relTypeId: Int, propertyKeyId: Int): IdempotentResult[MandatoryPropertyConstraint] = ???
+
+  //TODO implement
+  def dropRelationshipMandatoryConstraint(relTypeId: Int, propertyKeyId: Int) = ???
 
   override def hasLocalFileAccess: Boolean = graph match {
     case db: GraphDatabaseAPI => db.getDependencyResolver.resolveDependency(classOf[Config]).get(GraphDatabaseSettings.allow_file_urls)

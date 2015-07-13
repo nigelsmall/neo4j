@@ -45,11 +45,11 @@ import org.neo4j.ndp.messaging.v1.message.Message;
 import org.neo4j.ndp.runtime.internal.Neo4jError;
 import org.neo4j.packstream.PackStream;
 import org.neo4j.packstream.PackType;
-import org.neo4j.stream.Record;
+import org.neo4j.ndp.runtime.spi.Record;
 
 import static org.neo4j.ndp.messaging.v1.infrastructure.ValueParser.parseId;
 import static org.neo4j.ndp.runtime.internal.Neo4jError.codeFromString;
-import static org.neo4j.stream.Records.record;
+import static org.neo4j.ndp.runtime.spi.Records.record;
 
 public class PackStreamMessageFormatV1 implements MessageFormat
 {
@@ -395,7 +395,7 @@ public class PackStreamMessageFormatV1 implements MessageFormat
             }
             else
             {
-                throw new RuntimeException( "Unpackable value " + obj + " of type " + obj.getClass().getName() );
+                throw new NDPIOException( Status.General.UnknownFailure, "Unpackable value " + obj + " of type " + obj.getClass().getName() );
             }
         }
     }
@@ -673,11 +673,11 @@ public class PackStreamMessageFormatV1 implements MessageFormat
                     return new ValuePath( entities );
                 }
                 default:
-                    throw new IOException( "Unknown struct type: " + signature );
+                    throw new NDPIOException( Status.Request.InvalidFormat, "Unknown struct type: " + signature );
                 }
             }
             default:
-                throw new IOException( "Unknown value type: " + valType );
+                throw new NDPIOException( Status.Request.InvalidFormat, "Unknown value type: " + valType );
             }
         }
 

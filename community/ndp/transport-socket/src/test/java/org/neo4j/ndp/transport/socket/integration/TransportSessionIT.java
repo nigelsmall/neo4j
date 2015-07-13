@@ -43,8 +43,9 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.neo4j.helpers.collection.MapUtil.map;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgRecord;
 import static org.neo4j.ndp.messaging.v1.util.MessageMatchers.msgSuccess;
+import static org.neo4j.ndp.runtime.spi.StreamMatchers.eqRecord;
 import static org.neo4j.ndp.transport.socket.client.MiniDriver.equalsArray;
-import static org.neo4j.runtime.internal.runner.StreamMatchers.eqRecord;
+
 
 @RunWith(Parameterized.class)
 public class TransportSessionIT

@@ -19,10 +19,10 @@
  */
 package org.neo4j.cypher.internal.compatibility
 
-import org.neo4j.cypher.CypherExecutionException
 import org.neo4j.cypher.internal.compiler.v2_3.spi
 import org.neo4j.cypher.internal.compiler.v2_3.spi._
-import org.neo4j.graphdb.{Direction, Node, PropertyContainer, Relationship}
+import org.neo4j.cypher.{ConstraintValidationException, CypherExecutionException}
+import org.neo4j.graphdb.{ConstraintViolationException => KernelConstraintViolationException, Direction, Node, PropertyContainer, Relationship}
 import org.neo4j.kernel.api.TokenNameLookup
 import org.neo4j.kernel.api.exceptions.KernelException
 import org.neo4j.kernel.api.index.IndexDescriptor
@@ -112,11 +112,17 @@ class ExceptionTranslatingQueryContextFor2_3(inner: QueryContext) extends Delega
   override def dropUniqueConstraint(labelId: Int, propertyKeyId: Int) =
     translateException(super.dropUniqueConstraint(labelId, propertyKeyId))
 
-  override def createMandatoryConstraint(labelId: Int, propertyKeyId: Int) =
-    translateException(super.createMandatoryConstraint(labelId, propertyKeyId))
+  override def createNodeMandatoryConstraint(labelId: Int, propertyKeyId: Int) =
+    translateException(super.createNodeMandatoryConstraint(labelId, propertyKeyId))
 
-  override def dropMandatoryConstraint(labelId: Int, propertyKeyId: Int) =
-    translateException(super.dropMandatoryConstraint(labelId, propertyKeyId))
+  override def dropNodeMandatoryConstraint(labelId: Int, propertyKeyId: Int) =
+    translateException(super.dropNodeMandatoryConstraint(labelId, propertyKeyId))
+
+  override def createRelationshipMandatoryConstraint(relTypeId: Int, propertyKeyId: Int) =
+    translateException(super.createRelationshipMandatoryConstraint(relTypeId, propertyKeyId))
+
+  override def dropRelationshipMandatoryConstraint(relTypeId: Int, propertyKeyId: Int) =
+    translateException(super.dropRelationshipMandatoryConstraint(relTypeId, propertyKeyId))
 
   override def withAnyOpenQueryContext[T](work: (QueryContext) => T): T =
     super.withAnyOpenQueryContext(qc =>
@@ -192,7 +198,7 @@ class ExceptionTranslatingQueryContextFor2_3(inner: QueryContext) extends Delega
 
       def labelGetName(labelId: Int): String = inner.getLabelName(labelId)
     }), e)
-
+    case e : KernelConstraintViolationException => throw new ConstraintValidationException(e.getMessage, e)
   }
 }
 

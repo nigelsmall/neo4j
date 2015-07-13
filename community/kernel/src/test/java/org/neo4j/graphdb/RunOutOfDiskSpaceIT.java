@@ -28,9 +28,10 @@ import java.io.IOException;
 
 import org.neo4j.graphdb.mockfs.LimitedFileSystemGraphDatabase;
 import org.neo4j.helpers.Exceptions;
+import org.neo4j.io.pagecache.PageCache;
 import org.neo4j.kernel.impl.store.NeoStore;
-import org.neo4j.kernel.impl.store.record.NeoStoreUtil;
 import org.neo4j.test.CleanupRule;
+import org.neo4j.test.PageCacheRule;
 import org.neo4j.test.TargetDirectory;
 
 import static org.junit.Assert.assertEquals;
@@ -80,7 +81,9 @@ public class RunOutOfDiskSpaceIT
         db.somehowGainMoreDiskSpace(); // to help shutting down the db
         db.shutdown();
 
-        assertEquals( logVersion, new NeoStoreUtil( new File( storeDir ), db.getFileSystem() ).getLogVersion() );
+        PageCache pageCache = pageCacheRule.getPageCache( db.getFileSystem() );
+        File neoStore = new File( storeDir, NeoStore.DEFAULT_NAME );
+        assertEquals( logVersion, NeoStore.getRecord( pageCache, neoStore, NeoStore.Position.LOG_VERSION ) );
     }
 
     @Test
@@ -137,8 +140,13 @@ public class RunOutOfDiskSpaceIT
         db.somehowGainMoreDiskSpace(); // to help shutting down the db
         db.shutdown();
 
-        assertEquals( logVersion, new NeoStoreUtil( new File( storeDir ), db.getFileSystem() ).getLogVersion() );
+        PageCache pageCache = pageCacheRule.getPageCache( db.getFileSystem() );
+        File neoStore = new File( storeDir, NeoStore.DEFAULT_NAME );
+        assertEquals( logVersion, NeoStore.getRecord( pageCache, neoStore, NeoStore.Position.LOG_VERSION ) );
     }
 
-    public final @Rule TargetDirectory.TestDirectory testDirectory = TargetDirectory.testDirForTest( getClass() );
+    @Rule
+    public final TargetDirectory.TestDirectory testDirectory = TargetDirectory.testDirForTest( getClass() );
+    @Rule
+    public final PageCacheRule pageCacheRule = new PageCacheRule();
 }

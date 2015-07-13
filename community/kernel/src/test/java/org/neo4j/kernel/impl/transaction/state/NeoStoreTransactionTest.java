@@ -97,6 +97,7 @@ import org.neo4j.kernel.impl.transaction.command.Command.PropertyCommand;
 import org.neo4j.kernel.impl.transaction.command.Command.RelationshipGroupCommand;
 import org.neo4j.kernel.impl.transaction.command.Command.SchemaRuleCommand;
 import org.neo4j.kernel.impl.transaction.command.NeoCommandHandler;
+import org.neo4j.kernel.impl.transaction.log.FakeCommitment;
 import org.neo4j.kernel.impl.transaction.log.PhysicalTransactionRepresentation;
 import org.neo4j.kernel.impl.transaction.log.TransactionAppender;
 import org.neo4j.kernel.impl.transaction.tracing.CommitEvent;
@@ -143,7 +144,7 @@ import static org.neo4j.kernel.api.index.NodePropertyUpdate.remove;
 import static org.neo4j.kernel.api.index.SchemaIndexProvider.NO_INDEX_PROVIDER;
 import static org.neo4j.kernel.impl.api.TransactionApplicationMode.INTERNAL;
 import static org.neo4j.kernel.impl.api.index.TestSchemaIndexProviderDescriptor.PROVIDER_DESCRIPTOR;
-import static org.neo4j.kernel.impl.store.UniquenessConstraintRule.uniquenessConstraintRule;
+import static org.neo4j.kernel.impl.store.UniquePropertyConstraintRule.uniquenessConstraintRule;
 import static org.neo4j.kernel.impl.store.record.IndexRule.indexRule;
 import static org.neo4j.kernel.impl.transaction.log.TransactionIdStore.BASE_TX_ID;
 
@@ -169,6 +170,7 @@ public class NeoStoreTransactionTest
     private LockService locks;
     private CacheAccessBackDoor cacheAccessBackDoor;
     private IndexingService mockIndexing;
+    private StoreFactory storeFactory;
 
     private static void assertRelationshipGroupDoesNotExist( NeoStoreTransactionContext txCtx, NodeRecord node,
                                                              int type )
@@ -1272,6 +1274,33 @@ public class NeoStoreTransactionTest
     }
 
     @Test
+    public void testRecordTransactionClosed() throws Exception
+    {
+        // GIVEN
+        long[] originalClosedTransaction = neoStore.getLastClosedTransaction();
+        long transactionId = originalClosedTransaction[0] + 1;
+        long version = 1l;
+        long byteOffset = 777l;
+
+        // WHEN
+        neoStore.transactionClosed( transactionId, version, byteOffset );
+        long[] closedTransactionFlags = neoStore.getLastClosedTransaction();
+
+        //EXPECT
+        assertEquals( version, closedTransactionFlags[1]);
+        assertEquals( byteOffset, closedTransactionFlags[2]);
+
+        // WHEN
+        neoStore.close();
+        neoStore = storeFactory.newNeoStore( false );
+
+        // EXPECT
+        long[] lastClosedTransactionFlags = neoStore.getLastClosedTransaction();
+        assertEquals( version, lastClosedTransactionFlags[1]);
+        assertEquals( byteOffset, lastClosedTransactionFlags[2]);
+    }
+
+    @Test
     public void shouldSortRelationshipGroups() throws Exception
     {
         // GIVEN a node with group of type 10
@@ -1402,7 +1431,7 @@ public class NeoStoreTransactionTest
 
         File storeDir = new File( "dir" );
 
-        StoreFactory storeFactory = new StoreFactory(
+        storeFactory = new StoreFactory(
                 storeDir,
                 config,
                 idGeneratorFactory,
@@ -1454,7 +1483,7 @@ public class NeoStoreTransactionTest
         TransactionAppender appenderMock = mock( TransactionAppender.class );
         when( appenderMock.append(
                 Matchers.<TransactionRepresentation>any(),
-                any( LogAppendEvent.class ) ) ).thenReturn( nextTxId++ );
+                any( LogAppendEvent.class ) ) ).thenReturn( new FakeCommitment( nextTxId++, neoStore ) );
         @SuppressWarnings( "unchecked" )
         Provider<LabelScanWriter> labelScanStore = mock( Provider.class );
         when( labelScanStore.instance() ).thenReturn( mock( LabelScanWriter.class ) );

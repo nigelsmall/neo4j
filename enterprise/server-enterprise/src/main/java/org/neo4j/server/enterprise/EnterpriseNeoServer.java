@@ -20,25 +20,17 @@
 package org.neo4j.server.enterprise;
 
 import java.io.File;
-import java.util.Map;
 
 import org.neo4j.helpers.collection.Iterables;
 import org.neo4j.kernel.GraphDatabaseAPI;
 import org.neo4j.kernel.configuration.Config;
 import org.neo4j.kernel.ha.HighlyAvailableGraphDatabase;
 import org.neo4j.kernel.impl.factory.GraphDatabaseFacadeFactory.Dependencies;
-import org.neo4j.kernel.impl.storemigration.StoreUpgrader;
 import org.neo4j.logging.LogProvider;
-import org.neo4j.server.InterruptThreadTimer;
 import org.neo4j.server.advanced.AdvancedNeoServer;
-import org.neo4j.server.configuration.ConfigurationBuilder;
 import org.neo4j.server.database.Database;
 import org.neo4j.server.database.LifecycleManagingDatabase.GraphFactory;
 import org.neo4j.server.modules.ServerModule;
-import org.neo4j.server.preflight.EnsurePreparedForHttpLogging;
-import org.neo4j.server.preflight.PerformRecoveryIfNecessary;
-import org.neo4j.server.preflight.PerformUpgradeIfNecessary;
-import org.neo4j.server.preflight.PreFlightTasks;
 import org.neo4j.server.rest.management.AdvertisableService;
 import org.neo4j.server.web.ServerInternalSettings;
 import org.neo4j.server.webadmin.rest.MasterInfoServerModule;
@@ -62,30 +54,15 @@ public class EnterpriseNeoServer extends AdvancedNeoServer
         }
     };
 
-    public EnterpriseNeoServer( ConfigurationBuilder configurator, Dependencies dependencies, LogProvider logProvider )
+    public EnterpriseNeoServer( Config config, Dependencies dependencies, LogProvider logProvider )
     {
-        super( configurator, createDbFactory( configurator.configuration() ), dependencies, logProvider );
-    }
-
-    public EnterpriseNeoServer( ConfigurationBuilder configurator, Database.Factory dbFactory, Dependencies dependencies, LogProvider logProvider )
-    {
-        super( configurator, dbFactory, dependencies, logProvider );
+        super( config, createDbFactory( config ), dependencies, logProvider );
     }
 
     protected static Database.Factory createDbFactory( Config config )
     {
         final String mode = config.get( EnterpriseServerSettings.mode ).toUpperCase();
         return mode.equals( HA ) ? lifecycleManagingDatabase( ENTERPRISE_FACTORY ) : lifecycleManagingDatabase( COMMUNITY_FACTORY );
-    }
-
-    @Override
-    protected PreFlightTasks createPreflightTasks()
-    {
-        return new PreFlightTasks( logProvider,
-                new EnsurePreparedForHttpLogging( configurator.configuration() ), new PerformUpgradeIfNecessary(
-                        getConfig(), configurator.getDatabaseTuningProperties(), logProvider,
-                        StoreUpgrader.NO_MONITOR ), new PerformRecoveryIfNecessary( getConfig(),
-                        configurator.getDatabaseTuningProperties(), logProvider ) );
     }
 
     @SuppressWarnings( "unchecked" )
@@ -95,47 +72,6 @@ public class EnterpriseNeoServer extends AdvancedNeoServer
         return mix(
                 asList( (ServerModule) new MasterInfoServerModule( webServer, getConfig(),
                         logProvider ) ), super.createServerModules() );
-    }
-
-    @Override
-    protected InterruptThreadTimer createInterruptStartupTimer()
-    {
-        // If we are in HA mode, database startup can take a very long time, so
-        // we default to disabling the startup timeout here, unless explicitly overridden
-        // by configuration.
-        if ( getConfig().get( EnterpriseServerSettings.mode ).equalsIgnoreCase( "ha" ) )
-        {
-            final long startupTimeout = getStartTimeoutFromPropertiesOrSetToZeroIfNoKeyFound();
-            InterruptThreadTimer stopStartupTimer;
-            if ( startupTimeout > 0 )
-            {
-                stopStartupTimer = InterruptThreadTimer.createTimer( startupTimeout, Thread.currentThread() );
-            }
-            else
-            {
-                stopStartupTimer = InterruptThreadTimer.createNoOpTimer();
-            }
-            return stopStartupTimer;
-        }
-        else
-        {
-            return super.createInterruptStartupTimer();
-        }
-    }
-
-    private long getStartTimeoutFromPropertiesOrSetToZeroIfNoKeyFound()
-    {
-        long startupTimeout;
-        final Map<String,String> params = getConfig().getParams();
-        if ( params.containsKey( ServerInternalSettings.startup_timeout.name() ) )
-        {
-            startupTimeout = getConfig().get( ServerInternalSettings.startup_timeout );
-        }
-        else
-        {
-            startupTimeout = 0;
-        }
-        return startupTimeout;
     }
 
     @Override

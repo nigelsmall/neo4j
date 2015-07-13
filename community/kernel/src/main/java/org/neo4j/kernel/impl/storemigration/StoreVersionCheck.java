@@ -21,42 +21,40 @@ package org.neo4j.kernel.impl.storemigration;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 
 import org.neo4j.helpers.UTF8;
-import org.neo4j.io.fs.FileSystemAbstraction;
-import org.neo4j.io.fs.StoreChannel;
+import org.neo4j.io.pagecache.PageCache;
+import org.neo4j.io.pagecache.PageCursor;
+import org.neo4j.io.pagecache.PagedFile;
+import org.neo4j.kernel.impl.util.Charsets;
 
 import static org.neo4j.kernel.impl.storemigration.StoreVersionCheck.Result.Outcome;
 
 public class StoreVersionCheck
 {
-    private final FileSystemAbstraction fs;
+    private final PageCache pageCache;
 
-    public StoreVersionCheck( FileSystemAbstraction fs )
+    public StoreVersionCheck( PageCache pageCache )
     {
-        this.fs = fs;
+        this.pageCache = pageCache;
     }
 
     public Result hasVersion( File storeFile, String expectedVersion )
     {
-        StoreChannel fileChannel = null;
         String storeFilename = storeFile.getName();
-        byte[] expectedVersionBytes = UTF8.encode( expectedVersion );
-        try
+        try ( PagedFile file = pageCache.map( storeFile, pageCache.pageSize() ) )
         {
-            if ( !fs.fileExists( storeFile ) )
-            {
-                return new Result( Outcome.missingStoreFile, null, storeFilename );
-            }
-
-            fileChannel = fs.open( storeFile, "r" );
-            if ( fileChannel.size() < expectedVersionBytes.length )
+            if ( file.getLastPageId() == -1 )
             {
                 return new Result( Outcome.storeVersionNotFound, null, storeFilename );
             }
 
-            String actualVersion = readVersion( fileChannel, expectedVersionBytes.length );
+            String actualVersion = readVersion( file, expectedVersion );
+            if ( actualVersion == null )
+            {
+                return new Result( Outcome.storeVersionNotFound, null, storeFilename );
+            }
+
             if ( !actualVersion.startsWith( typeDescriptor( expectedVersion ) ) )
             {
                 return new Result( Outcome.storeVersionNotFound, actualVersion, storeFilename );
@@ -69,22 +67,9 @@ public class StoreVersionCheck
         }
         catch ( IOException e )
         {
-            throw new RuntimeException( e );
+            return new Result( Outcome.missingStoreFile, null, storeFilename );
         }
-        finally
-        {
-            if ( fileChannel != null )
-            {
-                try
-                {
-                    fileChannel.close();
-                }
-                catch ( IOException e )
-                {
-                    // Ignore exception on close
-                }
-            }
-        }
+
         return new Result( Outcome.ok, null, storeFilename );
     }
 
@@ -98,12 +83,53 @@ public class StoreVersionCheck
         return expectedVersion.substring( 0, spaceIndex );
     }
 
-    private String readVersion( StoreChannel fileChannel, int bytesToRead ) throws IOException
+    private String readVersion( PagedFile pagedFile, String expectedVersion ) throws IOException
     {
-        fileChannel.position( fileChannel.size() - bytesToRead );
-        byte[] foundVersionBytes = new byte[bytesToRead];
-        fileChannel.read( ByteBuffer.wrap( foundVersionBytes ) );
-        return UTF8.decode( foundVersionBytes );
+        byte[] encodedExpectedVersion = UTF8.encode( expectedVersion );
+        int maximumNumberOfPagesVersionSpans = encodedExpectedVersion.length / pagedFile.pageSize() + 2;
+        String version = null;
+        try ( PageCursor pageCursor = pagedFile.io(
+                Math.max( pagedFile.getLastPageId() + 1 - maximumNumberOfPagesVersionSpans, 0 ),
+                PagedFile.PF_SHARED_LOCK ) )
+        {
+            int currentPage = 0;
+            byte[] allData = new byte[pagedFile.pageSize() * maximumNumberOfPagesVersionSpans];
+            while ( pageCursor.next() )
+            {
+                byte[] data = new byte[pagedFile.pageSize()];
+                do
+                {
+                    pageCursor.getBytes( data );
+                }
+                while ( pageCursor.shouldRetry() );
+                System.arraycopy( data, 0, allData, currentPage * data.length, data.length );
+                currentPage++;
+            }
+            int offset = findPattern( allData, UTF8.encode( expectedVersion.split( " " )[0] ) );
+            if ( offset != -1 )
+            {
+                version = new String( allData, offset, encodedExpectedVersion.length, Charsets.UTF_8 );
+            }
+        }
+        return version;
+    }
+
+    private int findPattern( byte[] src, byte[] sought )
+    {
+        for ( int i = src.length - sought.length; i >= 0; i-- )
+        {
+            int pos = 0;
+            while ( pos < sought.length && src[i + pos] == sought[pos] )
+            {
+                pos++;
+            }
+            if ( pos == sought.length )
+            {
+                return i;
+            }
+
+        }
+        return -1;
     }
 
     public static class Result

@@ -50,6 +50,7 @@ import org.neo4j.kernel.api.properties.Property
 import org.neo4j.kernel.api.{ReadOperations, Statement, StatementTokenNameLookup, TokenNameLookup}
 import org.neo4j.kernel.impl.api.store.RelationshipIterator
 import org.neo4j.kernel.impl.api.{RelationshipDataExtractor, RelationshipVisitor}
+import org.neo4j.kernel.impl.core.NodeManager
 
 import scala.collection.mutable
 
@@ -69,7 +70,7 @@ object GeneratedQueryStructure extends CodeStructure[GeneratedQuery] {
       val fields = Fields(
         closer = clazz.field(typeRef[TaskCloser], "closer"),
         ro = clazz.field(typeRef[ReadOperations], "ro"),
-        db = clazz.field(typeRef[GraphDatabaseService], "db"),
+        nodeManager = clazz.field(typeRef[NodeManager], "nodeManager"),
         executionMode = clazz.field(typeRef[ExecutionMode], "executionMode"),
         description = clazz.field(typeRef[Supplier[InternalPlanDescription]], "description"),
         tracer = clazz.field(typeRef[QueryExecutionTracer], "tracer"),
@@ -78,7 +79,7 @@ object GeneratedQueryStructure extends CodeStructure[GeneratedQuery] {
         success = clazz.generate(Templates.SUCCESS))
       // the "COLUMNS" static field
       clazz.staticField(typeRef[util.List[String]], "COLUMNS", Templates.asList(
-        columns.toSeq.map(key => Expression.constant(key))))
+        columns.map(key => Expression.constant(key))))
 
       // the operator id fields
       operatorIds.keys.foreach { opId =>
@@ -113,7 +114,7 @@ object GeneratedQueryStructure extends CodeStructure[GeneratedQuery] {
       using(clazz.generateMethod(typeRef[GeneratedQueryExecution], "execute",
         param[TaskCloser]("closer"),
         param[Statement]("statement"),
-        param[GraphDatabaseService]("db"),
+        param[NodeManager]("nodeManager"),
         param[ExecutionMode]("executionMode"),
         param[Supplier[InternalPlanDescription]]("description"),
         param[QueryExecutionTracer]("tracer"),
@@ -121,14 +122,14 @@ object GeneratedQueryStructure extends CodeStructure[GeneratedQuery] {
         execute.returns(Expression.invoke(Expression.newInstance(execution), MethodReference.constructorReference(execution,
           typeRef[TaskCloser],
           typeRef[Statement],
-          typeRef[GraphDatabaseService],
+          typeRef[NodeManager],
           typeRef[ExecutionMode],
           typeRef[Supplier[InternalPlanDescription]],
           typeRef[QueryExecutionTracer],
           typeRef[util.Map[String, Object]]),
           execute.load("closer"),
           execute.load("statement"),
-          execute.load("db"),
+          execute.load("nodeManager"),
           execute.load("executionMode"),
           execute.load("description"),
           execute.load("tracer"),
@@ -179,7 +180,7 @@ object GeneratedQueryStructure extends CodeStructure[GeneratedQuery] {
 
 private case class Fields(closer: FieldReference,
                           ro: FieldReference,
-                          db: FieldReference,
+                          nodeManager: FieldReference,
                           executionMode: FieldReference,
                           description: FieldReference,
                           tracer: FieldReference,
@@ -332,7 +333,7 @@ private case class Method(fields: Fields, generator: CodeBlock, aux:AuxGenerator
     body.returns()
   }
 
-  override def materializeNode(nodeIdVar: String) = Expression.invoke(db, Methods.getNodeById, generator.load(nodeIdVar))
+  override def materializeNode(nodeIdVar: String) = Expression.invoke(nodeManager, Methods.newNodeProxyById, generator.load(nodeIdVar))
 
   override def node(nodeIdVar: String) = Templates.newInstance(typeRef[NodeIdWrapper], generator.load(nodeIdVar))
 
@@ -344,7 +345,7 @@ private case class Method(fields: Fields, generator: CodeBlock, aux:AuxGenerator
       onSuccess)
   }
 
-  override def materializeRelationship(relIdVar: String) = Expression.invoke(db, Methods.getRelationshipById, generator.load(relIdVar))
+  override def materializeRelationship(relIdVar: String) = Expression.invoke(nodeManager, Methods.newRelationshipProxyById, generator.load(relIdVar))
 
   override def relationship(relIdVar: String) = Templates.newInstance(typeRef[RelationshipIdWrapper], generator.load(relIdVar))
 
@@ -443,7 +444,7 @@ private case class Method(fields: Fields, generator: CodeBlock, aux:AuxGenerator
 
   private def readOperations = Expression.get(generator.self(), fields.ro)
 
-  private def db = Expression.get(generator.self(), fields.db)
+  private def nodeManager = Expression.get(generator.self(), fields.nodeManager)
 
   private def resultRow = generator.load("row")
 
@@ -677,9 +678,7 @@ private case class Method(fields: Fields, generator: CodeBlock, aux:AuxGenerator
     val local = locals(propValueVar)
     Templates.handleExceptions(generator, fields.ro) { body =>
 
-      body.assign(local, Expression.invoke(
-        Expression.invoke(readOperations, Methods.nodeGetProperty, body.load(nodeIdVar), body.load(propIdVar)),
-        Methods.value, Expression.constant(null)))
+      body.assign(local, Expression.invoke(readOperations, Methods.nodeGetProperty, body.load(nodeIdVar), body.load(propIdVar)))
 
     }
   }
@@ -687,27 +686,21 @@ private case class Method(fields: Fields, generator: CodeBlock, aux:AuxGenerator
   override def nodeGetPropertyById(nodeIdVar: String, propId: Int, propValueVar: String) = {
     val local = locals(propValueVar)
     Templates.handleExceptions(generator, fields.ro) { body =>
-      body.assign(local, Expression.invoke(
-        Expression.invoke(readOperations, Methods.nodeGetProperty, body.load(nodeIdVar), Expression.constant(propId)),
-        Methods.value, Expression.constant(null)))
+      body.assign(local, Expression.invoke(readOperations, Methods.nodeGetProperty, body.load(nodeIdVar), Expression.constant(propId)))
     }
   }
 
   override def relationshipGetPropertyForVar(relIdVar: String, propIdVar: String, propValueVar: String) = {
     val local = locals(propValueVar)
     Templates.handleExceptions(generator, fields.ro) { body =>
-      body.assign(local, Expression.invoke(
-        Expression.invoke(readOperations, Methods.relationshipGetProperty, body.load(relIdVar), body.load(propIdVar)),
-        Methods.value, Expression.constant(null)))
+      body.assign(local, Expression.invoke(readOperations, Methods.relationshipGetProperty, body.load(relIdVar), body.load(propIdVar)))
     }
   }
 
   override def relationshipGetPropertyById(relIdVar: String, propId: Int, propValueVar: String) = {
     val local = locals(propValueVar)
     Templates.handleExceptions(generator, fields.ro) { body =>
-      body.assign(local, Expression.invoke(
-        Expression.invoke(readOperations, Methods.relationshipGetProperty, body.load(relIdVar), Expression.constant(propId)),
-        Methods.value, Expression.constant(null)))
+      body.assign(local, Expression.invoke(readOperations, Methods.relationshipGetProperty, body.load(relIdVar), Expression.constant(propId)))
     }
   }
 
@@ -793,16 +786,15 @@ private object Methods {
   val nodesGetForLabel = method[ReadOperations, PrimitiveLongIterator]("nodesGetForLabel", typeRef[Int])
   val nodeHasLabel = method[ReadOperations, Boolean]("nodeHasLabel", typeRef[Long], typeRef[Int])
   val nextLong = method[PrimitiveLongIterator, Long]("next")
-  val getNodeById = method[GraphDatabaseService, Node]("getNodeById")
+  val newNodeProxyById = method[NodeManager, Node]("newNodeProxyById")
   val nodeId = method[NodeIdWrapper, Long]("id")
   val relId = method[RelationshipIdWrapper, Long]("id")
-  val getRelationshipById = method[GraphDatabaseService, Relationship]("getRelationshipById")
+  val newRelationshipProxyById = method[NodeManager, Relationship]("newRelationshipProxyById")
   val set = method[ResultRowImpl, Unit]("set", typeRef[String], typeRef[Object])
   val visit = method[ResultVisitor[_], Boolean]("visit", typeRef[ResultRow])
   val executeOperator = method[QueryExecutionTracer, QueryExecutionEvent]("executeOperator", typeRef[Id])
   val dbHit = method[QueryExecutionEvent, Unit]("dbHit")
   val row = method[QueryExecutionEvent, Unit]("row")
-  val value = method[Property, Object]("value", typeRef[Object])
 }
 
 private object Templates {
@@ -847,18 +839,18 @@ private object Templates {
   val CONSTRUCTOR = MethodTemplate.constructor(
     param[TaskCloser]("closer"),
     param[Statement]("statement"),
-    param[GraphDatabaseService]("db"),
+    param[NodeManager]("nodeManager"),
     param[ExecutionMode]("executionMode"),
     param[Supplier[InternalPlanDescription]]("description"),
     param[QueryExecutionTracer]("tracer"),
     param[util.Map[String, Object]]("params")).
     put(self(), typeRef[TaskCloser], "closer", load("closer")).
     put(self(), typeRef[ReadOperations], "ro", invoke(load("statement"), method[Statement, ReadOperations]("readOperations"))).
-    put(self(), typeRef[GraphDatabaseService], "db", load("db")).
     put(self(), typeRef[ExecutionMode], "executionMode", load("executionMode")).
     put(self(), typeRef[Supplier[InternalPlanDescription]], "description", load("description")).
     put(self(), typeRef[QueryExecutionTracer], "tracer", load("tracer")).
     put(self(), typeRef[util.Map[String, Object]], "params", load("params")).
+    put(self(), typeRef[NodeManager], "nodeManager", load("nodeManager")).
     build()
 
   val SET_SUCCESSFUL_CLOSEABLE = MethodTemplate.method(typeRef[Unit], "setSuccessfulCloseable",

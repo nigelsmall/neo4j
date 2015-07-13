@@ -32,6 +32,7 @@ import org.neo4j.io.fs.FileSystemAbstraction;
 import org.neo4j.io.fs.StoreChannel;
 import org.neo4j.io.pagecache.PageCache;
 import org.neo4j.io.pagecache.PageCursor;
+import org.neo4j.io.pagecache.PagedFile;
 import org.neo4j.kernel.IdGeneratorFactory;
 import org.neo4j.kernel.IdType;
 import org.neo4j.kernel.configuration.Config;
@@ -66,8 +67,6 @@ import static org.neo4j.kernel.impl.util.CappedOperation.time;
  */
 public class NeoStore extends AbstractStore implements TransactionIdStore, LogVersionRepository
 {
-    private static final long[] CLOSED_TX_META = new long[]{1};
-
     public abstract static class Configuration
             extends AbstractStore.Configuration
     {
@@ -99,8 +98,8 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
         UPGRADE_TIME( 8, "Time of last upgrade" ),
         LAST_TRANSACTION_CHECKSUM( 9, "Checksum of last committed transaction" ),
         UPGRADE_TRANSACTION_CHECKSUM( 10, "Checksum of transaction id the most recent upgrade was performed at" ),
-        LAST_TRANSACTION_LOG_VERSION( 11, "Log version where the last transaction commit entry has been written into" ),
-        LAST_TRANSACTION_LOG_BYTE_OFFSET( 12, "Byte offset in the log file where the last transaction commit entry " +
+        LAST_CLOSED_TRANSACTION_LOG_VERSION( 11, "Log version where the last transaction commit entry has been written into" ),
+        LAST_CLOSED_TRANSACTION_LOG_BYTE_OFFSET( 12, "Byte offset in the log file where the last transaction commit entry " +
                                               "has been written into" );
 
         private final int id;
@@ -120,10 +119,22 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
 
     public static final int META_DATA_RECORD_COUNT = Position.values().length;
 
-    public static boolean isStorePresent( FileSystemAbstraction fs, File storeDir )
+    public static boolean isStorePresent( PageCache pageCache, File storeDir )
     {
         File neoStore = new File( storeDir, DEFAULT_NAME );
-        return fs.fileExists( neoStore );
+        try ( PagedFile file = pageCache.map( neoStore, getPageSize( pageCache ) ) )
+        {
+            if ( file.getLastPageId() == -1 )
+            {
+                return false;
+            }
+        }
+        catch ( IOException e )
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private NodeStore nodeStore;
@@ -148,14 +159,14 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
     private volatile long upgradeTxIdField = FIELD_NOT_INITIALIZED;
     private volatile long upgradeTimeField = FIELD_NOT_INITIALIZED;
     private volatile long lastTransactionChecksum = FIELD_NOT_INITIALIZED;
-    private volatile long lastTransactionLogVersion = FIELD_NOT_INITIALIZED;
-    private volatile long lastTransactionLogByteOffset = FIELD_NOT_INITIALIZED;
+    private volatile long lastClosedTransactionLogVersion = FIELD_NOT_INITIALIZED;
+    private volatile long lastClosedTransactionLogByteOffset = FIELD_NOT_INITIALIZED;
     private volatile long upgradeTxChecksumField = FIELD_NOT_INITIALIZED;
 
     // This is not a field in the store, but something keeping track of which of the committed
     // transactions have been closed. Useful in rotation and shutdown.
-    private final OutOfOrderSequence lastCommittedTx = new ArrayQueueOutOfOrderSequence( -1, 200, new long[3] );
-    private final OutOfOrderSequence lastClosedTx = new ArrayQueueOutOfOrderSequence( -1, 200, CLOSED_TX_META );
+    private final OutOfOrderSequence lastCommittedTx = new ArrayQueueOutOfOrderSequence( -1, 200, new long[1] );
+    private final OutOfOrderSequence lastClosedTx = new ArrayQueueOutOfOrderSequence( -1, 200, new long[2] );
 
     private final int relGrabSize;
     private final CappedOperation<Void> transactionCloseWaitLogger;
@@ -244,7 +255,7 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
                  * in garbage.
                  * Yes, this has to be fixed to be prettier.
                  */
-                String foundVersion = versionLongToString( getRecord( fileSystemAbstraction,
+                String foundVersion = versionLongToString( getRecord( pageCache,
                         storageFileName, Position.STORE_VERSION ) );
                 if ( !CommonAbstractStore.ALL_STORES_VERSION.equals( foundVersion ) )
                 {
@@ -415,34 +426,48 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
     /**
      * Reads a record from a neostore file.
      *
-     * @param fs {@link FileSystemAbstraction} the {@code neoStore} file lives in.
+     * @param pageCache {@link PageCache} the {@code neoStore} file lives in.
      * @param neoStore {@link File} pointing to the neostore.
      * @param recordPosition record {@link Position}.
      * @return the read record value specified by {@link Position}.
      */
-    public static long getRecord( FileSystemAbstraction fs, File neoStore, Position recordPosition )
+    public static long getRecord( PageCache pageCache, File neoStore, Position recordPosition )
     {
-        try ( StoreChannel channel = fs.open( neoStore, "r" ) )
+        try ( PagedFile pagedFile = pageCache.map( neoStore, getPageSize( pageCache ) ) )
         {
-            /*
-             * We have to check size, because the store version
-             * field was introduced with 1.5, so if there is a non-clean
-             * shutdown we may have a buffer underflow.
-             */
-            if ( recordPosition.id >= Position.STORE_VERSION.id && channel.size() < RECORD_SIZE * 5 )
+            if ( pagedFile.getLastPageId() != -1 )
             {
-                return -1;
+                try ( PageCursor cursor = pagedFile.io( 0, PagedFile.PF_SHARED_LOCK ) )
+                {
+                    if ( cursor.next() )
+                    {
+                        byte recordByte;
+                        long record;
+                        do
+                        {
+                            cursor.setOffset( RECORD_SIZE * recordPosition.id );
+                            recordByte = cursor.getByte();
+                            record = cursor.getLong();
+                        }
+                        while ( cursor.shouldRetry() );
+                        if ( recordByte == Record.IN_USE.byteValue() )
+                        {
+                            return record;
+                        }
+                    }
+                }
             }
-            channel.position( RECORD_SIZE * recordPosition.id + 1/*inUse*/ );
-            ByteBuffer buffer = ByteBuffer.allocate( 8 );
-            channel.read( buffer );
-            buffer.flip();
-            return buffer.getLong();
         }
         catch ( IOException e )
         {
             throw new RuntimeException( e );
         }
+        return -1;
+    }
+
+    private static int getPageSize( PageCache pageCache )
+    {
+        return pageCache.pageSize() - pageCache.pageSize() % RECORD_SIZE;
     }
 
     public StoreId getStoreId()
@@ -592,11 +617,11 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
             graphNextPropField = getRecordValue( cursor, Position.FIRST_GRAPH_PROPERTY );
             latestConstraintIntroducingTxField = getRecordValue( cursor, Position.LAST_CONSTRAINT_TRANSACTION );
             lastTransactionChecksum = getRecordValue( cursor, Position.LAST_TRANSACTION_CHECKSUM );
-            lastTransactionLogVersion = getRecordValue( cursor, Position.LAST_TRANSACTION_LOG_VERSION );
-            lastTransactionLogByteOffset = getRecordValue( cursor, Position.LAST_TRANSACTION_LOG_BYTE_OFFSET );
-            lastClosedTx.set( lastCommittedTxId, CLOSED_TX_META );
-            lastCommittedTx.set( lastCommittedTxId, new long[]{lastTransactionChecksum, lastTransactionLogVersion,
-                    lastTransactionLogByteOffset} );
+            lastClosedTransactionLogVersion = getRecordValue( cursor, Position.LAST_CLOSED_TRANSACTION_LOG_VERSION );
+            lastClosedTransactionLogByteOffset = getRecordValue( cursor, Position.LAST_CLOSED_TRANSACTION_LOG_BYTE_OFFSET );
+            lastClosedTx.set( lastCommittedTxId,
+                    new long[]{lastClosedTransactionLogVersion, lastClosedTransactionLogByteOffset} );
+            lastCommittedTx.set( lastCommittedTxId, new long[]{lastTransactionChecksum} );
             upgradeTxChecksumField = getRecordValue( cursor, Position.UPGRADE_TRANSACTION_CHECKSUM );
         }
         while ( cursor.shouldRetry() );
@@ -907,18 +932,14 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
     }
 
     @Override
-    public void transactionCommitted( long transactionId, long checksum, long logVersion, long byteOffset )
+    public void transactionCommitted( long transactionId, long checksum )
     {
-        if ( lastCommittedTx.offer( transactionId, new long[]{checksum, logVersion, byteOffset} ) )
+        if ( lastCommittedTx.offer( transactionId, new long[]{checksum} ) )
         {
             long[] transactionData = lastCommittedTx.get();
             setRecord( Position.LAST_TRANSACTION_ID, transactionData[0] );
             setRecord( Position.LAST_TRANSACTION_CHECKSUM, transactionData[1] );
-            setRecord( Position.LAST_TRANSACTION_LOG_VERSION, transactionData[2] );
-            setRecord( Position.LAST_TRANSACTION_LOG_BYTE_OFFSET, transactionData[3] );
             lastTransactionChecksum = checksum;
-            lastTransactionLogVersion = logVersion;
-            lastTransactionLogByteOffset = byteOffset;
         }
     }
 
@@ -950,6 +971,13 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
         return lastClosedTx.getHighestGapFreeNumber();
     }
 
+    @Override
+    public long[] getLastClosedTransaction()
+    {
+        checkInitialized( lastCommittingTxField.get() );
+        return lastClosedTx.get();
+    }
+
     // Ensures that all fields are read from the store, by checking the initial value of the field in question
     private void checkInitialized( long field )
     {
@@ -964,21 +992,28 @@ public class NeoStore extends AbstractStore implements TransactionIdStore, LogVe
     {
         setRecord( Position.LAST_TRANSACTION_ID, transactionId );
         setRecord( Position.LAST_TRANSACTION_CHECKSUM, checksum );
-        setRecord( Position.LAST_TRANSACTION_LOG_VERSION, logVersion );
-        setRecord( Position.LAST_TRANSACTION_LOG_BYTE_OFFSET, byteOffset );
+        setRecord( Position.LAST_CLOSED_TRANSACTION_LOG_VERSION, logVersion );
+        setRecord( Position.LAST_CLOSED_TRANSACTION_LOG_BYTE_OFFSET, byteOffset );
         checkInitialized( lastCommittingTxField.get() );
         lastCommittingTxField.set( transactionId );
-        lastClosedTx.set( transactionId, CLOSED_TX_META );
-        lastCommittedTx.set( transactionId, new long[]{checksum, logVersion, byteOffset} );
+        lastCommittedTx.set( transactionId, new long[]{checksum} );
         lastTransactionChecksum = checksum;
-        lastTransactionLogVersion = logVersion;
-        lastTransactionLogByteOffset = byteOffset;
+        lastClosedTx.set( transactionId, new long[]{logVersion, byteOffset} );
+        lastClosedTransactionLogVersion = logVersion;
+        lastClosedTransactionLogByteOffset = byteOffset;
     }
 
     @Override
-    public void transactionClosed( long transactionId )
+    public void transactionClosed( long transactionId, long logVersion, long byteOffset )
     {
-        lastClosedTx.offer( transactionId, CLOSED_TX_META );
+        if ( lastClosedTx.offer( transactionId, new long[]{logVersion, byteOffset} ) )
+        {
+            long[] lastClosedTransactionData = lastClosedTx.get();
+            setRecord( Position.LAST_CLOSED_TRANSACTION_LOG_VERSION, lastClosedTransactionData[1] );
+            setRecord( Position.LAST_CLOSED_TRANSACTION_LOG_BYTE_OFFSET, lastClosedTransactionData[2] );
+            lastClosedTransactionLogVersion = lastClosedTransactionData[1];
+            lastClosedTransactionLogByteOffset = lastClosedTransactionData[2];
+        }
     }
 
     @Override

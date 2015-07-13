@@ -21,26 +21,34 @@ package org.neo4j.kernel.impl.transaction.log;
 
 import java.io.File;
 
-import org.neo4j.io.fs.FileSystemAbstraction;
-import org.neo4j.kernel.impl.store.record.NeoStoreUtil;
+import org.neo4j.io.pagecache.PageCache;
+import org.neo4j.kernel.impl.store.NeoStore;
+
+import static org.neo4j.kernel.impl.store.NeoStore.Position;
 
 public class ReadOnlyTransactionIdStore implements TransactionIdStore
 {
     private final long transactionId;
     private final long transactionChecksum;
+    private final long logVersion;
+    private final long byteOffset;
 
-    public ReadOnlyTransactionIdStore( FileSystemAbstraction fs, File storeDir )
+    public ReadOnlyTransactionIdStore( PageCache pageCache, File storeDir )
     {
-        long id = 0, checksum = 0;
-        if ( NeoStoreUtil.neoStoreExists( fs, storeDir ) )
+        long id = 0, checksum = 0, logVersion = 0, byteOffset = 0;
+        if ( NeoStore.isStorePresent( pageCache, storeDir ) )
         {
-            NeoStoreUtil access = new NeoStoreUtil( storeDir, fs );
-            id = access.getLastCommittedTx();
-            checksum = access.getLastCommittedTxChecksum();
+            File neoStore = new File( storeDir, NeoStore.DEFAULT_NAME );
+            id = NeoStore.getRecord( pageCache, neoStore, Position.LAST_TRANSACTION_ID );
+            checksum = NeoStore.getRecord( pageCache, neoStore, Position.LAST_TRANSACTION_CHECKSUM );
+            logVersion = NeoStore.getRecord( pageCache, neoStore, Position.LAST_CLOSED_TRANSACTION_LOG_VERSION );
+            byteOffset = NeoStore.getRecord( pageCache, neoStore, Position.LAST_CLOSED_TRANSACTION_LOG_BYTE_OFFSET );
         }
 
         this.transactionId = id;
         this.transactionChecksum = checksum;
+        this.logVersion = logVersion;
+        this.byteOffset = byteOffset;
     }
 
     @Override
@@ -50,7 +58,7 @@ public class ReadOnlyTransactionIdStore implements TransactionIdStore
     }
 
     @Override
-    public void transactionCommitted( long transactionId, long checksum, long logVersion, long logByteOffset )
+    public void transactionCommitted( long transactionId, long checksum )
     {
         throw new UnsupportedOperationException( "Read-only transaction ID store" );
     }
@@ -80,13 +88,19 @@ public class ReadOnlyTransactionIdStore implements TransactionIdStore
     }
 
     @Override
+    public long[] getLastClosedTransaction()
+    {
+        return new long[]{transactionId, logVersion, byteOffset};
+    }
+
+    @Override
     public void setLastCommittedAndClosedTransactionId( long transactionId, long checksum, long logVersion, long logByteOffset )
     {
         throw new UnsupportedOperationException( "Read-only transaction ID store" );
     }
 
     @Override
-    public void transactionClosed( long transactionId )
+    public void transactionClosed( long transactionId, long logVersion, long logByteOffset )
     {
         throw new UnsupportedOperationException( "Read-only transaction ID store" );
     }

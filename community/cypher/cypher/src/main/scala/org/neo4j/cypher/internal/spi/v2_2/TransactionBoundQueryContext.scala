@@ -27,7 +27,6 @@ import org.neo4j.cypher.internal.compiler.v2_3.helpers.JavaConversionSupport._
 import org.neo4j.graphdb.DynamicRelationshipType._
 import org.neo4j.graphdb._
 import org.neo4j.graphdb.factory.GraphDatabaseSettings
-import org.neo4j.helpers.collection.IteratorUtil
 import org.neo4j.kernel.GraphDatabaseAPI
 import org.neo4j.kernel.api._
 import org.neo4j.kernel.api.constraints.UniquenessConstraint
@@ -112,10 +111,10 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     JavaConversionSupport.asScala(statement.readOperations().nodeGetLabels(node))
 
   def getPropertiesForNode(node: Long) =
-    JavaConversionSupport.mapToScala(statement.readOperations().nodeGetAllPropertiesKeys(node))(_.toLong)
+    JavaConversionSupport.mapToScala(statement.readOperations().nodeGetPropertyKeys(node))(_.toLong)
 
   def getPropertiesForRelationship(relId: Long) =
-    JavaConversionSupport.mapToScala(statement.readOperations().relationshipGetAllPropertiesKeys(relId))(_.toLong)
+    JavaConversionSupport.mapToScala(statement.readOperations().relationshipGetPropertyKeys(relId))(_.toLong)
 
   override def isLabelSetOnNode(label: Int, node: Long) =
     statement.readOperations().nodeHasLabel(node, label)
@@ -160,14 +159,14 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     }
 
     def propertyKeyIds(id: Long): Iterator[Int] =
-      statement.readOperations().nodeGetAllProperties(id).asScala.map(_.propertyKeyId())
+      asScala(statement.readOperations().nodeGetPropertyKeys(id))
 
     def getProperty(id: Long, propertyKeyId: Int): Any = {
-      statement.readOperations().nodeGetProperty(id, propertyKeyId).value(null)
+      statement.readOperations().nodeGetProperty(id, propertyKeyId)
     }
 
     def hasProperty(id: Long, propertyKey: Int) =
-      statement.readOperations().nodeGetProperty(id, propertyKey).isDefined
+      statement.readOperations().nodeHasProperty(id, propertyKey)
 
     def removeProperty(id: Long, propertyKeyId: Int) {
       statement.dataWriteOperations().nodeRemoveProperty(id, propertyKeyId)
@@ -201,13 +200,13 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     }
 
     def propertyKeyIds(id: Long): Iterator[Int] =
-      statement.readOperations().relationshipGetAllProperties(id).asScala.map(_.propertyKeyId())
+      asScala(statement.readOperations().relationshipGetPropertyKeys(id))
 
     def getProperty(id: Long, propertyKeyId: Int): Any =
-      statement.readOperations().relationshipGetProperty(id, propertyKeyId).value(null)
+      statement.readOperations().relationshipGetProperty(id, propertyKeyId)
 
     def hasProperty(id: Long, propertyKey: Int) =
-      statement.readOperations().relationshipGetProperty(id, propertyKey).isDefined
+      statement.readOperations().relationshipHasProperty(id, propertyKey)
 
     def removeProperty(id: Long, propertyKeyId: Int) {
       statement.dataWriteOperations().relationshipRemoveProperty(id, propertyKeyId)
@@ -281,12 +280,10 @@ final class TransactionBoundQueryContext(graph: GraphDatabaseAPI,
     statement.schemaWriteOperations().indexDrop(new IndexDescriptor(labelId, propertyKeyId))
 
   def createUniqueConstraint(labelId: Int, propertyKeyId: Int): IdempotentResult[UniquenessConstraint] = try {
-    IdempotentResult(statement.schemaWriteOperations().uniquenessConstraintCreate(labelId, propertyKeyId))
+    IdempotentResult(statement.schemaWriteOperations().uniquePropertyConstraintCreate(labelId, propertyKeyId))
   } catch {
-    case _: AlreadyConstrainedException =>
-      val readOperations: ReadOperations = statement.readOperations()
-      val uniquenessConstraints = readOperations.constraintsGetForLabelAndPropertyKey(labelId, propertyKeyId)
-      IdempotentResult(IteratorUtil.single(uniquenessConstraints), wasCreated = false)
+    case existing: AlreadyConstrainedException =>
+      IdempotentResult(existing.constraint().asInstanceOf[UniquenessConstraint], wasCreated = false)
   }
 
   def dropUniqueConstraint(labelId: Int, propertyKeyId: Int) =

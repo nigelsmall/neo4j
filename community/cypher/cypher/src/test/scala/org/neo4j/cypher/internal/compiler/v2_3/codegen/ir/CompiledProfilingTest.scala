@@ -35,6 +35,7 @@ import org.neo4j.cypher.internal.compiler.v2_3.{ProfileMode, symbols}
 import org.neo4j.function.Supplier
 import org.neo4j.graphdb.{GraphDatabaseService, Node}
 import org.neo4j.kernel.api._
+import org.neo4j.kernel.impl.core.{NodeProxy, NodeManager}
 import org.neo4j.test.ImpermanentGraphDatabase
 
 class CompiledProfilingTest extends CypherFunSuite with CodeGenSugar {
@@ -48,12 +49,12 @@ class CompiledProfilingTest extends CypherFunSuite with CodeGenSugar {
     val projectNode = expressions.NodeProjection(variable)
     val compiled = compile(Seq(WhileLoop(variable,
       ScanAllNodes("OP1"), AcceptVisitor("OP2", "X", Map("n" -> projectNode)))),
-      Map("OP1" -> id1, "OP2" -> id2, "X" -> new Id()))
+      Seq("n"), Map("OP1" -> id1, "OP2" -> id2, "X" -> new Id()))
 
     val statement = mock[Statement]
     val readOps = mock[ReadOperations]
-    val db = mock[GraphDatabaseService]
-    when(db.getNodeById(anyLong())).thenReturn(mock[Node])
+    val nodeManager = mock[NodeManager]
+    when(nodeManager.newNodeProxyById(anyLong())).thenReturn(mock[NodeProxy])
     when(statement.readOperations()).thenReturn(readOps)
     when(readOps.nodesGetAll()).thenReturn(new PrimitiveLongIterator {
       private var counter = 0
@@ -73,7 +74,7 @@ class CompiledProfilingTest extends CypherFunSuite with CodeGenSugar {
 
     // when
     val tracer = new ProfilingTracer()
-    newInstance(compiled, statement = statement, graphdb = db, supplier = supplier, queryExecutionTracer = tracer).size
+    newInstance(compiled, statement = statement, nodeManager = nodeManager, supplier = supplier, queryExecutionTracer = tracer).size
 
     // then
     tracer.dbHitsOf(id1) should equal(3)
@@ -99,7 +100,7 @@ class CompiledProfilingTest extends CypherFunSuite with CodeGenSugar {
     val rhs = AllNodesScan(IdName("a"), Set.empty)(solved)
     val join = NodeHashJoin(Set(IdName("a")), lhs, rhs)(solved)
     val projection = Projection(join, Map("foo" -> SignedDecimalIntegerLiteral("1")(null)))(solved)
-    val plan = ProduceResult(List.empty, List.empty, List("foo"), projection)
+    val plan = ProduceResult(List("foo"), projection)
 
     // when
     val result = compileAndExecute(plan, graphDb, mode = ProfileMode)

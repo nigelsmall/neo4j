@@ -21,7 +21,7 @@ package org.neo4j.cypher.internal.compiler.v2_3.spi
 
 import org.neo4j.cypher.internal.compiler.v2_3.InternalQueryStatistics
 import org.neo4j.graphdb._
-import org.neo4j.kernel.api.constraints.UniquenessConstraint
+import org.neo4j.kernel.api.constraints.{MandatoryPropertyConstraint, UniquenessConstraint}
 import org.neo4j.kernel.api.index.IndexDescriptor
 
 /*
@@ -95,9 +95,13 @@ trait QueryContext extends TokenContext {
 
   def dropUniqueConstraint(labelId: Int, propertyKeyId: Int)
 
-  def createMandatoryConstraint(labelId: Int, propertyKeyId: Int): IdempotentResult[UniquenessConstraint]//TODO add MandatoryConstraint when doing kernel work
+  def createNodeMandatoryConstraint(labelId: Int, propertyKeyId: Int): IdempotentResult[MandatoryPropertyConstraint]
 
-  def dropMandatoryConstraint(labelId: Int, propertyKeyId: Int)
+  def dropNodeMandatoryConstraint(labelId: Int, propertyKeyId: Int)
+
+  def createRelationshipMandatoryConstraint(relTypeId: Int, propertyKeyId: Int): IdempotentResult[MandatoryPropertyConstraint]
+
+  def dropRelationshipMandatoryConstraint(relTypeId: Int, propertyKeyId: Int)
 
   def getOptStatistics: Option[InternalQueryStatistics] = None
 

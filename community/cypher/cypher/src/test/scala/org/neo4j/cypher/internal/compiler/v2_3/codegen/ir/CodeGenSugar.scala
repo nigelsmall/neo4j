@@ -37,7 +37,7 @@ import org.neo4j.graphdb.Result.{ResultRow, ResultVisitor}
 import org.neo4j.helpers.Clock
 import org.neo4j.kernel.GraphDatabaseAPI
 import org.neo4j.kernel.api.Statement
-import org.neo4j.kernel.impl.core.ThreadToStatementContextBridge
+import org.neo4j.kernel.impl.core.{NodeManager, ThreadToStatementContextBridge}
 import org.scalatest.mock.MockitoSugar
 
 import scala.collection.JavaConversions
@@ -68,7 +68,8 @@ trait CodeGenSugar extends MockitoSugar {
     val tx = graphDb.beginTx()
     try {
       val statement = graphDb.getDependencyResolver.resolveDependency(classOf[ThreadToStatementContextBridge]).get()
-      val result = plan.executionResultBuilder(statement, graphDb, mode, tracer(mode), params, taskCloser)
+      val nodeManager = graphDb.getDependencyResolver.resolveDependency(classOf[NodeManager])
+      val result = plan.executionResultBuilder(statement, nodeManager, mode, tracer(mode), params, taskCloser)
       tx.success()
       result.size
       result
@@ -79,11 +80,12 @@ trait CodeGenSugar extends MockitoSugar {
 
   def evaluate(instructions: Seq[Instruction],
                stmt: Statement = mock[Statement],
-               db: GraphDatabaseService = null,
+               nodeManager: NodeManager = null,
+                columns: Seq[String] = Seq.empty,
                params: Map[String, AnyRef] = Map.empty,
                operatorIds: Map[String, Id] = Map.empty): List[Map[String, Object]] = {
-    val clazz = compile(instructions, operatorIds)
-    val result = newInstance(clazz, statement = stmt, graphdb = db, params = params)
+    val clazz = compile(instructions, columns,  operatorIds)
+    val result = newInstance(clazz, statement = stmt, nodeManager = nodeManager, params = params)
     evaluate(result)
   }
 
@@ -99,10 +101,10 @@ trait CodeGenSugar extends MockitoSugar {
     rows
   }
 
-  def compile(instructions: Seq[Instruction], operatorIds: Map[String, Id] = Map.empty): GeneratedQuery = {
+  def compile(instructions: Seq[Instruction], columns: Seq[String], operatorIds: Map[String, Id] = Map.empty): GeneratedQuery = {
     //In reality the same namer should be used for construction Instruction as in generating code
     //these tests separate the concerns so we give this namer non-standard prefixes
-    CodeGenerator.generateCode(GeneratedQueryStructure)(instructions, operatorIds)(
+    CodeGenerator.generateCode(GeneratedQueryStructure)(instructions, operatorIds, columns)(
       new CodeGenContext(new SemanticTable(), Map.empty, new Namer(
         new AtomicInteger(0), varPrefix = "TEST_VAR", methodPrefix = "TEST_METHOD")))
   }
@@ -111,11 +113,13 @@ trait CodeGenSugar extends MockitoSugar {
                   taskCloser: TaskCloser = new TaskCloser,
                   statement: Statement = mock[Statement],
                   graphdb: GraphDatabaseService = null,
+                  nodeManager: NodeManager = null,
                   executionMode: ExecutionMode = null,
                   supplier: Supplier[InternalPlanDescription] = null,
                   queryExecutionTracer: QueryExecutionTracer = QueryExecutionTracer.NONE,
                   params: Map[String, AnyRef] = Map.empty): InternalExecutionResult = {
-    val generated = clazz.execute(taskCloser, statement, graphdb, executionMode, supplier, queryExecutionTracer, JavaConversions.mapAsJavaMap(params))
+    val generated = clazz.execute(taskCloser, statement, nodeManager,
+      executionMode, supplier, queryExecutionTracer, JavaConversions.mapAsJavaMap(params))
     new CompiledExecutionResult(taskCloser, statement, generated, supplier)
   }
 

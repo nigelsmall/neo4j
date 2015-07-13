@@ -24,7 +24,7 @@ import java.util.Iterator;
 import org.neo4j.collection.primitive.PrimitiveIntIterator;
 import org.neo4j.collection.primitive.PrimitiveLongIterator;
 import org.neo4j.graphdb.Direction;
-import org.neo4j.kernel.api.constraints.UniquenessConstraint;
+import org.neo4j.kernel.api.constraints.PropertyConstraint;
 import org.neo4j.kernel.api.cursor.NodeCursor;
 import org.neo4j.kernel.api.cursor.RelationshipCursor;
 import org.neo4j.kernel.api.exceptions.EntityNotFoundException;
@@ -38,7 +38,6 @@ import org.neo4j.kernel.api.exceptions.schema.TooManyLabelsException;
 import org.neo4j.kernel.api.index.IndexDescriptor;
 import org.neo4j.kernel.api.index.InternalIndexState;
 import org.neo4j.kernel.api.properties.DefinedProperty;
-import org.neo4j.kernel.api.properties.Property;
 import org.neo4j.kernel.impl.api.DegreeVisitor;
 import org.neo4j.kernel.impl.api.KernelStatement;
 import org.neo4j.kernel.impl.api.RelationshipVisitor;
@@ -54,10 +53,6 @@ public interface StoreReadLayer
 {
     // Cursor
     StoreStatement acquireStatement();
-
-    boolean nodeHasLabel( StoreStatement statement, long nodeId, int labelId ) throws EntityNotFoundException;
-
-    boolean nodeExists( long nodeId );
 
     PrimitiveIntIterator nodeGetLabels( StoreStatement statement, long nodeId ) throws EntityNotFoundException;
 
@@ -98,36 +93,18 @@ public interface StoreReadLayer
 
     IndexRule indexRule( IndexDescriptor index, SchemaStorage.IndexRuleKind kind );
 
-    PrimitiveIntIterator nodeGetPropertyKeys( StoreStatement statement, long nodeId ) throws EntityNotFoundException;
-
-    Property nodeGetProperty( StoreStatement statement, long nodeId, int propertyKeyId ) throws EntityNotFoundException;
-
-    Iterator<DefinedProperty> nodeGetAllProperties( StoreStatement statement,
-            long nodeId ) throws EntityNotFoundException;
-
-    boolean relationshipExists( long relationshipId );
-
-    PrimitiveIntIterator relationshipGetPropertyKeys( StoreStatement statement, long relationshipId )
-            throws EntityNotFoundException;
-
-    Property relationshipGetProperty( StoreStatement statement, long relationshipId, int propertyKeyId )
-            throws EntityNotFoundException;
-
-    Iterator<DefinedProperty> relationshipGetAllProperties( StoreStatement statement, long nodeId )
-            throws EntityNotFoundException;
-
     PrimitiveIntIterator graphGetPropertyKeys( KernelStatement state );
 
-    Property graphGetProperty( int propertyKeyId );
+    Object graphGetProperty( int propertyKeyId );
 
     Iterator<DefinedProperty> graphGetAllProperties();
 
-    Iterator<UniquenessConstraint> constraintsGetForLabelAndPropertyKey(
+    Iterator<PropertyConstraint> constraintsGetForLabelAndPropertyKey(
             int labelId, int propertyKeyId );
 
-    Iterator<UniquenessConstraint> constraintsGetForLabel( int labelId );
+    Iterator<PropertyConstraint> constraintsGetForLabel( int labelId );
 
-    Iterator<UniquenessConstraint> constraintsGetAll();
+    Iterator<PropertyConstraint> constraintsGetAll();
 
     PrimitiveLongResourceIterator nodeGetFromUniqueIndexSeek( KernelStatement state, IndexDescriptor index,
             Object value )
@@ -135,14 +112,13 @@ public interface StoreReadLayer
 
     PrimitiveLongIterator nodesGetForLabel( KernelStatement state, int labelId );
 
-    PrimitiveLongResourceIterator nodesGetFromIndexSeek( KernelStatement state, IndexDescriptor index, Object value )
+    PrimitiveLongIterator nodesGetFromIndexSeek( KernelStatement state, IndexDescriptor index, Object value )
             throws IndexNotFoundKernelException;
 
-    PrimitiveLongResourceIterator nodesGetFromIndexSeekByPrefix( KernelStatement state, IndexDescriptor index,
-            String prefix )
+    PrimitiveLongIterator nodesGetFromIndexSeekByPrefix( KernelStatement state, IndexDescriptor index, String prefix )
             throws IndexNotFoundKernelException;
 
-    PrimitiveLongResourceIterator nodesGetFromIndexScan( KernelStatement state, IndexDescriptor index )
+    PrimitiveLongIterator nodesGetFromIndexScan( KernelStatement state, IndexDescriptor index )
             throws IndexNotFoundKernelException;
 
     IndexDescriptor indexesGetForLabelAndPropertyKey( int labelId, int propertyKey );

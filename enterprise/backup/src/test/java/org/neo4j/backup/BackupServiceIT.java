@@ -42,6 +42,7 @@ import org.neo4j.graphdb.index.Index;
 import org.neo4j.io.fs.DefaultFileSystemAbstraction;
 import org.neo4j.io.fs.FileSystemAbstraction;
 import org.neo4j.io.fs.FileUtils;
+import org.neo4j.io.pagecache.PageCache;
 import org.neo4j.kernel.GraphDatabaseAPI;
 import org.neo4j.kernel.NeoStoreDataSource;
 import org.neo4j.kernel.configuration.Config;
@@ -49,20 +50,19 @@ import org.neo4j.kernel.impl.store.MismatchingStoreIdException;
 import org.neo4j.kernel.impl.store.NeoStore;
 import org.neo4j.kernel.impl.store.NeoStore.Position;
 import org.neo4j.kernel.impl.store.StoreFactory;
-import org.neo4j.kernel.impl.store.record.NeoStoreUtil;
 import org.neo4j.kernel.impl.storemigration.LogFiles;
 import org.neo4j.kernel.impl.storemigration.StoreFile;
 import org.neo4j.kernel.impl.transaction.CommittedTransactionRepresentation;
 import org.neo4j.kernel.impl.transaction.log.IOCursor;
 import org.neo4j.kernel.impl.transaction.log.LogFile;
-import org.neo4j.kernel.impl.transaction.log.checkpoint.CheckPointer;
-import org.neo4j.kernel.impl.transaction.log.rotation.LogRotation;
 import org.neo4j.kernel.impl.transaction.log.LogicalTransactionStore;
 import org.neo4j.kernel.impl.transaction.log.PhysicalLogFiles;
 import org.neo4j.kernel.impl.transaction.log.ReadOnlyTransactionStore;
 import org.neo4j.kernel.impl.transaction.log.TransactionIdStore;
+import org.neo4j.kernel.impl.transaction.log.checkpoint.CheckPointer;
 import org.neo4j.kernel.impl.transaction.log.entry.LogHeader;
 import org.neo4j.kernel.impl.transaction.log.entry.LogHeaderReader;
+import org.neo4j.kernel.impl.transaction.log.rotation.LogRotation;
 import org.neo4j.kernel.impl.transaction.state.DataSourceManager;
 import org.neo4j.kernel.impl.transaction.state.NeoStoreSupplier;
 import org.neo4j.kernel.impl.util.Dependencies;
@@ -75,7 +75,8 @@ import org.neo4j.test.Barrier;
 import org.neo4j.test.DatabaseRule;
 import org.neo4j.test.DbRepresentation;
 import org.neo4j.test.EmbeddedDatabaseRule;
-import org.neo4j.test.Mute;
+import org.neo4j.test.PageCacheRule;
+import org.neo4j.test.SuppressOutput;
 import org.neo4j.test.TargetDirectory;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -126,7 +127,9 @@ public class BackupServiceIT
     @Rule
     public EmbeddedDatabaseRule dbRule = new EmbeddedDatabaseRule( storeDir );
     @Rule
-    public Mute mute = Mute.muteAll();
+    public SuppressOutput suppressOutput = SuppressOutput.suppressAll();
+    @Rule
+    public final PageCacheRule pageCacheRule = new PageCacheRule();
 
     @Before
     public void setup()
@@ -257,7 +260,7 @@ public class BackupServiceIT
         // then
         assertEquals( DbRepresentation.of( storeDir ), DbRepresentation.of( backupDir ) );
 
-        assertEquals( 0, getLastTxChecksum() );
+        assertEquals( 0, getLastTxChecksum( pageCacheRule.getPageCache( fileSystem ) ) );
     }
 
     @Test
@@ -276,7 +279,7 @@ public class BackupServiceIT
 
         // then
         assertEquals( DbRepresentation.of( storeDir ), DbRepresentation.of( backupDir ) );
-        assertNotEquals( 0, getLastTxChecksum() );
+        assertNotEquals( 0, getLastTxChecksum( pageCacheRule.getPageCache( fileSystem ) ) );
     }
 
     @Test
@@ -321,7 +324,7 @@ public class BackupServiceIT
 
         // then
         assertEquals( DbRepresentation.of( storeDir ), DbRepresentation.of( backupDir ) );
-        assertNotEquals( 0, getLastTxChecksum() );
+        assertNotEquals( 0, getLastTxChecksum( pageCacheRule.getPageCache( fileSystem ) ) );
     }
 
     @Test
@@ -659,11 +662,12 @@ public class BackupServiceIT
     {
         // Assert last committed transaction can be found in tx log and is the last tx in the log
         LifeSupport life = new LifeSupport();
+        PageCache pageCache = pageCacheRule.getPageCache( fileSystem );
         LogicalTransactionStore transactionStore =
-                life.add( new ReadOnlyTransactionStore( fileSystem, backupDir, monitors ) );
+                life.add( new ReadOnlyTransactionStore( pageCache, fileSystem, backupDir, monitors ) );
         life.start();
         try ( IOCursor<CommittedTransactionRepresentation> cursor =
-                transactionStore.getTransactions( txId ) )
+                      transactionStore.getTransactions( txId ) )
         {
             assertTrue( cursor.next() );
             assertEquals( txId, cursor.get().getCommitEntry().getTxId() );
@@ -675,13 +679,14 @@ public class BackupServiceIT
         }
 
         // Assert last committed transaction is correct in neostore
-        NeoStoreUtil store = new NeoStoreUtil( backupDir, fileSystem );
-        assertEquals( txId, store.getLastCommittedTx() );
+        File neoStore = new File( storeDir, NeoStore.DEFAULT_NAME );
+        assertEquals( txId, NeoStore.getRecord( pageCache, neoStore, Position.LAST_TRANSACTION_ID ) );
     }
 
-    private long getLastTxChecksum()
+    private long getLastTxChecksum( PageCache pageCache )
     {
-        return new NeoStoreUtil( backupDir ).getValue( Position.LAST_TRANSACTION_CHECKSUM );
+        File neoStore = new File( backupDir, NeoStore.DEFAULT_NAME );
+        return NeoStore.getRecord( pageCache, neoStore, Position.LAST_TRANSACTION_CHECKSUM );
     }
 
     private void deleteAllBackedUpTransactionLogs()
