@@ -22,6 +22,7 @@ package org.neo4j.bolt.v1.messaging;
 import java.io.IOException;
 import java.util.Map;
 
+import org.neo4j.bolt.BoltMessageLogger;
 import org.neo4j.bolt.v1.runtime.spi.Record;
 import org.neo4j.kernel.api.exceptions.Status;
 
@@ -41,21 +42,26 @@ public class BoltResponseMessageWriter implements BoltResponseMessageHandler<IOE
 
     private final Neo4jPack.Packer packer;
     private final BoltResponseMessageBoundaryHook onMessageComplete;
+    private final BoltMessageLogger messageLogger;
 
     /**
      * @param packer            serializer to output channel
      * @param onMessageComplete invoked for each message, after it's done writing to the output
+     * @param messageLogger     logger for Bolt messages
      */
-    public BoltResponseMessageWriter( Neo4jPack.Packer packer, BoltResponseMessageBoundaryHook onMessageComplete )
+    public BoltResponseMessageWriter( Neo4jPack.Packer packer, BoltResponseMessageBoundaryHook onMessageComplete,
+                                      BoltMessageLogger messageLogger )
     {
         this.packer = packer;
         this.onMessageComplete = onMessageComplete;
+        this.messageLogger = messageLogger;
     }
 
     @Override
     public void onRecord( Record item ) throws IOException
     {
         Object[] fields = item.fields();
+        messageLogger.record(fields);
         packer.packStructHeader( 1, RECORD.signature() );
         packer.packListHeader( fields.length );
         for ( Object field : fields )
@@ -73,6 +79,7 @@ public class BoltResponseMessageWriter implements BoltResponseMessageHandler<IOE
     @Override
     public void onSuccess( Map<String, Object> metadata ) throws IOException
     {
+        messageLogger.success( metadata );
         packer.packStructHeader( 1, SUCCESS.signature() );
         packer.packRawMap( metadata );
         onMessageComplete.onMessageComplete();
@@ -81,6 +88,7 @@ public class BoltResponseMessageWriter implements BoltResponseMessageHandler<IOE
     @Override
     public void onIgnored() throws IOException
     {
+        messageLogger.ignored();
         packer.packStructHeader( 0, IGNORED.signature() );
         onMessageComplete.onMessageComplete();
     }
@@ -88,6 +96,7 @@ public class BoltResponseMessageWriter implements BoltResponseMessageHandler<IOE
     @Override
     public void onFailure( Status status, String message ) throws IOException
     {
+        messageLogger.failure( status.code().serialize(), message );
         packer.packStructHeader( 1, FAILURE.signature() );
         packer.packMapHeader( 2 );
 
@@ -103,6 +112,7 @@ public class BoltResponseMessageWriter implements BoltResponseMessageHandler<IOE
     @Override
     public void onFatal( Status status, String message ) throws IOException
     {
+        messageLogger.serverError( "FATAL", status.code().serialize(), message );
         onFailure( status, message );
         flush();
     }
